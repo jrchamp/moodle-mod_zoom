@@ -28,7 +28,7 @@ jobs:
 
       - name: Find setup-php script
         if: ${{ !cancelled() }}
-        run: find . -name \*.sh
+        run: find /home/runner/work/_actions/shivammathur/setup-php/v2/src/scripts/ -name \*.sh
 
       - name: Make sure cancelled jobs are marked as failures.
         if: ${{ cancelled() }}
