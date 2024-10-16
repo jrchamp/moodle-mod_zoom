@@ -22,7 +22,6 @@ jobs:
         with:
           php-version: ${{ matrix.php }}
           ini-values: max_input_vars=5000
-          coverage: none
 
       - name: Check for redis files after setup-php
         if: ${{ !cancelled() }}
