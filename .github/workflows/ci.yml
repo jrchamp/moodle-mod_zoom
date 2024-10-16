@@ -26,9 +26,9 @@ jobs:
         if: ${{ !cancelled() }}
         run: find /etc/php -name \*redis\*
 
-      - name: Find setup-php script
+      - name: Show generated setup-php script
         if: ${{ !cancelled() }}
-        run: find /home/runner/work/_actions/shivammathur/setup-php/v2/src/scripts/ -name \*.sh
+        run: cat /home/runner/work/_actions/shivammathur/setup-php/v2/src/scripts/linux.sh
 
       - name: Make sure cancelled jobs are marked as failures.
         if: ${{ cancelled() }}
