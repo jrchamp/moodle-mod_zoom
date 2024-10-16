@@ -1,4 +1,4 @@
-name: Moodle Plugin CI
+name: Test setup-php with PHP 8.1
 
 on: [push, pull_request]
 
@@ -6,58 +6,16 @@ jobs:
   test:
     runs-on: 'ubuntu-latest'
 
-    services:
-      postgres:
-        image: postgres:13
-        env:
-          POSTGRES_USER: 'postgres'
-          POSTGRES_HOST_AUTH_METHOD: 'trust'
-        ports:
-          - 5432:5432
-        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 3
-
-      mariadb:
-        image: mariadb:10
-        env:
-          MYSQL_USER: 'root'
-          MYSQL_ALLOW_EMPTY_PASSWORD: "true"
-          MYSQL_CHARACTER_SET_SERVER: "utf8mb4"
-          MYSQL_COLLATION_SERVER: "utf8mb4_unicode_ci"
-        ports:
-          - 3306:3306
-        options: --health-cmd="mysqladmin ping" --health-interval 10s --health-timeout 5s --health-retries 3
-
     strategy:
       fail-fast: false
       matrix:
         include:
-          - php: '8.3'
-            moodle-branch: 'main'
-            database: 'mariadb'
-          - php: '8.3'
-            moodle-branch: 'MOODLE_404_STABLE'
-            database: 'mariadb'
-          - php: '8.2'
-            moodle-branch: 'MOODLE_403_STABLE'
-            database: 'pgsql'
           - php: '8.1'
-            moodle-branch: 'MOODLE_402_STABLE'
-            database: 'mariadb'
-          - php: '8.0'
-            moodle-branch: 'MOODLE_401_STABLE'
-            database: 'pgsql'
-          - php: '7.4'
-            moodle-branch: 'MOODLE_400_STABLE'
-            database: 'pgsql'
-          - php: '7.2'
-            moodle-branch: 'MOODLE_39_STABLE'
-            database: 'mariadb'
 
     steps:
-      - name: Check out repository code
-        uses: actions/checkout@v4
-        with:
-          path: plugin
+      - name: Check for redis files before setup-php
+        if: ${{ !cancelled() }}
+        run: find /etc/php -name \*redis\*
 
       - name: Setup PHP ${{ matrix.php }}
         uses: shivammathur/setup-php@v2
@@ -69,90 +27,9 @@ jobs:
           # If you try to use code coverage with "none", it will fallback to phpdbg (which has known problems).
           coverage: none
 
-      - name: Initialise moodle-plugin-ci
-        if: ${{ matrix.php >= '7.4' }}
-        run: |
-          composer create-project -n --no-dev --prefer-dist moodlehq/moodle-plugin-ci ci ^4
-
-      - name: Initialise moodle-plugin-ci v3
-        if: ${{ matrix.php < '7.4' }}
-        run: |
-          composer create-project -n --no-dev --prefer-dist moodlehq/moodle-plugin-ci ci ^3
-
-      - name: Set up environment
-        run: |
-          echo $(cd ci/bin; pwd) >> $GITHUB_PATH
-          echo $(cd ci/vendor/bin; pwd) >> $GITHUB_PATH
-          sudo locale-gen en_AU.UTF-8
-          echo "NVM_DIR=$HOME/.nvm" >> $GITHUB_ENV
-
-      - name: Install moodle-plugin-ci
-        id: install_ci
-        run: |
-          moodle-plugin-ci install --plugin ./plugin --db-host=127.0.0.1
-        env:
-          DB: ${{ matrix.database }}
-          MOODLE_BRANCH: ${{ matrix.moodle-branch }}
-          MUSTACHE_IGNORE_NAMES: 'mobile_view_page_latest.mustache,mobile_view_page_ionic3.mustache'
-          # Uncomment this to run Behat tests using the Moodle App.
-          # MOODLE_APP: 'true'
-
-      - name: PHP Lint
-        if: ${{ !cancelled() && steps.install_ci.outcome == 'success' }}
-        run: moodle-plugin-ci phplint
-
-      - name: PHP Mess Detector
-        continue-on-error: true # This step will show errors but will not fail
-        if: ${{ !cancelled() && steps.install_ci.outcome == 'success' }}
-        run: moodle-plugin-ci phpmd
-
-      - name: Moodle Code Checker
-        if: ${{ !cancelled() && steps.install_ci.outcome == 'success' }}
-        run: moodle-plugin-ci codechecker --max-warnings 0
-
-      - name: Moodle PHPDoc Checker
-        if: ${{ !cancelled() && steps.install_ci.outcome == 'success' && matrix.php >= '7.4' }}
-        run: moodle-plugin-ci phpdoc --max-warnings 0
-
-      - name: Moodle PHPDoc Checker v3
-        if: ${{ !cancelled() && steps.install_ci.outcome == 'success' && matrix.php < '7.4' }}
-        run: moodle-plugin-ci phpdoc
-
-      - name: Validating
-        if: ${{ !cancelled() && steps.install_ci.outcome == 'success' }}
-        run: moodle-plugin-ci validate
-
-      - name: Check upgrade savepoints
-        if: ${{ !cancelled() && steps.install_ci.outcome == 'success' }}
-        run: moodle-plugin-ci savepoints
-
-      - name: Mustache Lint
-        if: ${{ !cancelled() && steps.install_ci.outcome == 'success' }}
-        run: moodle-plugin-ci mustache
-
-      - name: Grunt
-        if: ${{ !cancelled() && steps.install_ci.outcome == 'success' }}
-        run: moodle-plugin-ci grunt --max-lint-warnings 0 || [ "$MOODLE_BRANCH" = 'MOODLE_39_STABLE' ] || [ "$MOODLE_BRANCH" = 'MOODLE_311_STABLE' ]
-        env:
-          MOODLE_BRANCH: ${{ matrix.moodle-branch }}
-
-      - name: PHPUnit tests
-        if: ${{ !cancelled() && steps.install_ci.outcome == 'success' }}
-        run: moodle-plugin-ci phpunit --fail-on-warning
-
-      - name: Behat features
-        id: behat
-        if: ${{ !cancelled() && steps.install_ci.outcome == 'success' }}
-        run: moodle-plugin-ci behat --profile chrome
-
-      - name: Upload Behat Faildump
-        if: ${{ failure() && steps.behat.outcome == 'failure' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: Behat Faildump (${{ join(matrix.*, ', ') }})
-          path: ${{ github.workspace }}/moodledata/behat_dump
-          retention-days: 7
-          if-no-files-found: ignore
+      - name: Check for redis files after setup-php
+        if: ${{ !cancelled() }}
+        run: find /etc/php -name \*redis\*
 
       - name: Make sure cancelled jobs are marked as failures.
         if: ${{ cancelled() }}
