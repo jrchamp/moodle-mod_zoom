@@ -233,6 +233,18 @@ if (!$showrecreate) {
         $aurl = new moodle_url('/mod/zoom/loadmeeting.php', ['id' => $cm->id]);
         $buttonhtml .= html_writer::input_hidden_params($aurl);
         $link = html_writer::tag('form', $buttonhtml, ['action' => $aurl->out_omit_querystring(), 'target' => '_blank']);
+
+        // FormaSuisse patch (see FORMASUISSE.md): second action button joining
+        // straight in the Zoom web client, preserving the personal ?tk= token.
+        // Hosts always start via the app path; registering users must register first.
+        if (!$userishost && $btntext === $strjoin) {
+            $browserurl = new moodle_url('/mod/zoom/loadmeeting.php', ['id' => $cm->id, 'browser' => 1]);
+            $browserbuttonhtml = html_writer::tag('button', get_string('joinbrowser', 'mod_zoom'),
+                ['type' => 'submit', 'class' => 'btn btn-secondary mt-2']);
+            $browserbuttonhtml .= html_writer::input_hidden_params($browserurl);
+            $link .= html_writer::tag('form', $browserbuttonhtml,
+                ['action' => $browserurl->out_omit_querystring(), 'target' => '_blank']);
+        }
     } else {
         // Get unavailability note.
         $unavailabilitynote = zoom_get_unavailability_note($zoom, $finished);

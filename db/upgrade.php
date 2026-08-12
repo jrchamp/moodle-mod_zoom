@@ -1024,5 +1024,28 @@ function xmldb_zoom_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2025050900, 'zoom');
     }
 
+    if ($oldversion < 2026081200) {
+        // FormaSuisse patch: define table zoom_seat_lease to be created (see FORMASUISSE.md).
+        $table = new xmldb_table('zoom_seat_lease');
+
+        // Adding fields to table zoom_seat_lease.
+        $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+        $table->add_field('zoomuserid', XMLDB_TYPE_CHAR, '32', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('ttl', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+
+        // Adding keys and indexes to table zoom_seat_lease.
+        $table->add_key('id_primary', XMLDB_KEY_PRIMARY, ['id']);
+        $table->add_index('zoomuserid_unique', XMLDB_INDEX_UNIQUE, ['zoomuserid']);
+
+        // Conditionally launch create table for zoom_seat_lease.
+        if (!$dbman->table_exists($table)) {
+            $dbman->create_table($table);
+        }
+
+        // Zoom savepoint reached.
+        upgrade_mod_savepoint(true, 2026081200, 'zoom');
+    }
+
     return true;
 }

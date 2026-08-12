@@ -29,12 +29,14 @@ require_login();
 
 // Course_module ID.
 $id = required_param('id', PARAM_INT);
+// FormaSuisse patch: join via the Zoom web client instead of the app launcher.
+$browser = optional_param('browser', 0, PARAM_BOOL);
 if ($id) {
     $context = context_module::instance($id);
     $PAGE->set_context($context);
 
     // Call load meeting function (note: this is where additional access checks happen).
-    $meetinginfo = zoom_load_meeting($id, $context);
+    $meetinginfo = zoom_load_meeting($id, $context, true, $browser);
 
     // Redirect if available, otherwise deny access.
     if ($meetinginfo['nexturl']) {

@@ -191,5 +191,19 @@
         <KEY NAME="fk_zoomeventid" TYPE="foreign-unique" FIELDS="zoomeventid" REFTABLE="event" REFFIELDS="id"/>
       </KEYS>
     </TABLE>
+    <TABLE NAME="zoom_seat_lease" COMMENT="FormaSuisse patch: short-lived seat leases protecting fresh license grants from concurrent reassignment (see FORMASUISSE.md).">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="zoomuserid" TYPE="char" LENGTH="32" NOTNULL="true" SEQUENCE="false" COMMENT="Zoom user ID holding the lease."/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Lease grant/confirmation time."/>
+        <FIELD NAME="ttl" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Lease lifetime in seconds; leases expire, they are never cleared."/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="id_primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="zoomuserid_unique" UNIQUE="true" FIELDS="zoomuserid"/>
+      </INDEXES>
+    </TABLE>
   </TABLES>
 </XMLDB>

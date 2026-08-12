@@ -458,17 +458,28 @@ class webservice {
     }
 
     /**
-     * Gets the ID of the user, of all the paid users, with the oldest last login time.
+     * Gets the ID of a paid user whose seat can be taken safely, oldest-login first.
      *
-     * @return string|false If user is found, returns the User ID. Otherwise, returns false.
+     * FormaSuisse patch (see FORMASUISSE.md): replaces the stock
+     * get_least_recently_active_paid_user_id(). Differences, all measured
+     * (formasuisse_infra#783): users without last_login_time are the OLDEST
+     * candidates, not exempt (shadow users never log in; ZAK starts do not
+     * update last_login_time); holders with an unexpired seat lease are
+     * skipped; a host with a live meeting is never demoted — the only
+     * trustworthy liveness signal is GET /users/{id}/meetings?type=live.
+     *
+     * Must be called under the 'seats' lock (see with_seat()).
+     *
+     * @return string|false If a safe victim is found, returns the User ID. Otherwise, returns false.
      */
-    private function get_least_recently_active_paid_user_id() {
-        $usertimes = [];
+    private function get_stealable_paid_user_id() {
+        global $DB;
 
-        // Classic: user:read:admin.
-        // Granular: user:read:list_users:admin.
+        // Fresh list — the static cache may predate seat moves made this request.
+        self::$userslist = null;
         $userslist = $this->list_users();
 
+        $usertimes = [];
         foreach ($userslist as $user) {
             // Skip Basic user accounts.
             if ($user->type == ZOOM_USER_TYPE_BASIC) {
@@ -480,22 +491,111 @@ class webservice {
                 continue;
             }
 
-            // We need the login time.
-            if (!isset($user->last_login_time)) {
+            // Count the user only if we're including all users or if the user is on this instance.
+            if (!$this->instanceusers || core_user::get_user_by_email($user->email)) {
+                // Missing last_login_time means never logged in => oldest possible candidate.
+                $usertimes[$user->id] = isset($user->last_login_time) ? strtotime($user->last_login_time) : 0;
+            }
+        }
+
+        asort($usertimes);
+
+        $now = time();
+        foreach (array_keys($usertimes) as $zoomuserid) {
+            // Skip unexpired leases. Direct $DB read on purpose: MUC staleness would defeat the guard.
+            $lease = $DB->get_record('zoom_seat_lease', ['zoomuserid' => $zoomuserid]);
+            if ($lease && ($lease->timecreated + $lease->ttl) > $now) {
                 continue;
             }
 
-            // Count the user only if we're including all users or if the user is on this instance.
-            if (!$this->instanceusers || core_user::get_user_by_email($user->email)) {
-                $usertimes[$user->id] = strtotime($user->last_login_time);
+            // Never demote a host with a live meeting.
+            // Classic: meeting:read:admin. Granular: meeting:read:list_meetings:admin.
+            $live = $this->make_call("users/$zoomuserid/meetings", ['type' => 'live']);
+            if (!empty($live->meetings)) {
+                continue;
             }
-        }
 
-        if (!empty($usertimes)) {
-            return array_search(min($usertimes), $usertimes);
+            return $zoomuserid;
         }
 
         return false;
+    }
+
+    /**
+     * Ensure $zoomhostid holds a seat for the duration of a license-gated operation, then run it.
+     *
+     * FormaSuisse patch (see FORMASUISSE.md). Lock for decisions, lease for
+     * grants: the cluster-wide 'seats' lock is held only around
+     * count-pool → pick-victim → move-seats → write-lease, never across the
+     * caller's Zoom API I/O. Every grant or confirmation upserts a
+     * zoom_seat_lease row so concurrent calls cannot steal a seat inside the
+     * protected interval; leases are never cleared, they expire.
+     *
+     * @param string $zoomhostid The Zoom user ID that must hold a seat.
+     * @param string $purpose 'write' (create/update/registrant — short TTL) or 'start' (long TTL).
+     * @param callable $fn The license-gated operation; run after the lock is released.
+     * @return mixed The return value of $fn.
+     * @throws seat_unavailable_exception When no seat can be safely provided (reason 'pool' or 'quota').
+     */
+    public function with_seat(string $zoomhostid, string $purpose, callable $fn) {
+        global $DB;
+
+        if (empty($this->recyclelicenses)) {
+            return $fn();
+        }
+
+        $lockfactory = \core\lock\lock_config::get_lock_factory('mod_zoom');
+        $lock = $lockfactory->get_lock('seats', 20);
+        if (!$lock) {
+            throw new seat_unavailable_exception('pool', 'could not acquire mod_zoom seats lock');
+        }
+
+        try {
+            // Classic: user:read:admin. Granular: user:read:user:admin.
+            if ($this->make_call("users/$zoomhostid")->type == ZOOM_USER_TYPE_BASIC) {
+                if ($this->paid_user_limit_reached()) {
+                    $victim = $this->get_stealable_paid_user_id();
+                    if ($victim === false) {
+                        throw new seat_unavailable_exception('pool');
+                    }
+
+                    // Demotions are always free (no quota impact).
+                    // Classic: user:write:admin. Granular: user:update:user:admin.
+                    $this->make_call("users/$victim", ['type' => ZOOM_USER_TYPE_BASIC], 'patch');
+                }
+
+                try {
+                    // Classic: user:write:admin. Granular: user:update:user:admin.
+                    $this->make_call("users/$zoomhostid", ['type' => ZOOM_USER_TYPE_PRO], 'patch');
+                } catch (moodle_exception $error) {
+                    // The promote PATCH fails when the monthly license-reassignment quota is spent.
+                    throw new seat_unavailable_exception('quota', $error->getMessage());
+                }
+
+                // Seats moved — the static users list is stale now.
+                self::$userslist = null;
+            }
+
+            // Upsert the lease for every grant or confirmation.
+            $leaseminutes = (int) get_config('zoom', 'seatleaseminutes');
+            $ttl = ($purpose === 'start') ? max(1, $leaseminutes ?: 10) * MINSECS : 120;
+            $lease = $DB->get_record('zoom_seat_lease', ['zoomuserid' => $zoomhostid]);
+            if ($lease) {
+                $lease->timecreated = time();
+                $lease->ttl = $ttl;
+                $DB->update_record('zoom_seat_lease', $lease);
+            } else {
+                $DB->insert_record('zoom_seat_lease', (object) [
+                    'zoomuserid' => $zoomhostid,
+                    'timecreated' => time(),
+                    'ttl' => $ttl,
+                ]);
+            }
+        } finally {
+            $lock->release();
+        }
+
+        return $fn();
     }
 
     /**
@@ -678,14 +778,20 @@ class webservice {
             $data['settings']['alternative_hosts'] = $zoom->alternative_hosts;
         }
 
-        if (isset($zoom->option_authenticated_users)) {
-            $data['settings']['meeting_authentication'] = (bool) $zoom->option_authenticated_users;
-        }
+        // FormaSuisse patch: default meeting_authentication to false explicitly —
+        // an inherited true silently breaks tk-link joins for students without
+        // Zoom accounts (measured, formasuisse_infra#783 T7).
+        $data['settings']['meeting_authentication'] = isset($zoom->option_authenticated_users)
+            ? (bool) $zoom->option_authenticated_users
+            : false;
 
         if (isset($zoom->registration)) {
             $data['settings']['approval_type'] = $zoom->registration;
             if ($zoom->registration != ZOOM_REGISTRATION_OFF) {
                 $data['settings']['use_pmi'] = false;
+                // FormaSuisse patch: students get their tk link from Moodle;
+                // Zoom's own confirmation email is redundant and off-brand.
+                $data['settings']['registrants_confirmation_email'] = false;
             }
         }
 
@@ -801,57 +907,37 @@ class webservice {
     }
 
     /**
-     * Provide a user with a license if needed and recycling is enabled.
-     *
-     * @param stdClass $zoomuserid The Zoom user to upgrade.
-     * @return void
-     */
-    public function provide_license($zoomuserid) {
-        // Checks whether we need to recycle licenses and acts accordingly.
-        // Classic: user:read:admin.
-        // Granular: user:read:user:admin.
-        if ($this->recyclelicenses && $this->make_call("users/$zoomuserid")->type == ZOOM_USER_TYPE_BASIC) {
-            $licenseisavailable = !$this->paid_user_limit_reached();
-            if (!$licenseisavailable) {
-                $leastrecentlyactivepaiduserid = $this->get_least_recently_active_paid_user_id();
-                // Changes least_recently_active_user to a basic user so we can use their license.
-                if ($leastrecentlyactivepaiduserid) {
-                    $this->make_call("users/$leastrecentlyactivepaiduserid", ['type' => ZOOM_USER_TYPE_BASIC], 'patch');
-                    $licenseisavailable = true;
-                }
-            }
-
-            // Changes current user to pro so they can make a meeting.
-            // Classic: user:write:admin.
-            // Granular: user:update:user:admin.
-            if ($licenseisavailable) {
-                $this->make_call("users/$zoomuserid", ['type' => ZOOM_USER_TYPE_PRO], 'patch');
-            }
-        }
-    }
-
-    /**
      * Create a meeting/webinar on Zoom.
      * Take a $zoom object as returned from the Moodle form and respond with an object that can be saved to the database.
+     *
+     * FormaSuisse patch: seat-guarded via with_seat(), and registration-bearing
+     * creates are read-back-verified (Zoom silently strips registration on
+     * unlicensed writes — measured, formasuisse_infra#783 T1).
      *
      * @param stdClass $zoom The meeting to create.
      * @param ?int $cmid The cmid if available.
      * @return stdClass The call response.
      */
     public function create_meeting($zoom, $cmid) {
-        // Provide license if needed.
-        $this->provide_license($zoom->host_id);
-
         // Classic: meeting:write:admin.
         // Granular: meeting:write:meeting:admin.
         // Classic: webinar:write:admin.
         // Granular: webinar:write:webinar:admin.
         $url = "users/$zoom->host_id/" . (!empty($zoom->webinar) ? 'webinars' : 'meetings');
-        return $this->make_call($url, $this->database_to_api($zoom, $cmid), 'post');
+        $data = $this->database_to_api($zoom, $cmid);
+        $response = $this->with_seat($zoom->host_id, 'write', function () use ($url, $data) {
+            return $this->make_call($url, $data, 'post');
+        });
+        $this->verify_readback($zoom, $data, $response->id ?? null);
+        return $response;
     }
 
     /**
      * Update a meeting/webinar on Zoom.
+     *
+     * FormaSuisse patch: seat-guarded via with_seat() — upstream never
+     * re-licenses on update, yet ANY update under a Basic host silently strips
+     * registration (measured, formasuisse_infra#783 T3) — and read-back-verified.
      *
      * @param stdClass $zoom The meeting to update.
      * @param ?int $cmid The cmid if available.
@@ -863,7 +949,55 @@ class webservice {
         // Classic: webinar:write:admin.
         // Granular: webinar:update:webinar:admin.
         $url = ($zoom->webinar ? 'webinars/' : 'meetings/') . $zoom->meeting_id;
-        $this->make_call($url, $this->database_to_api($zoom, $cmid), 'patch');
+        $data = $this->database_to_api($zoom, $cmid);
+        $this->with_seat($zoom->host_id, 'write', function () use ($url, $data) {
+            $this->make_call($url, $data, 'patch');
+        });
+        $this->verify_readback($zoom, $data, $zoom->meeting_id);
+    }
+
+    /**
+     * Verify that a registration-bearing create/update actually persisted on Zoom.
+     *
+     * FormaSuisse patch (see FORMASUISSE.md). Zoom answers 2xx and silently
+     * drops entitlement-gated settings (measured: unlicensed host T1/T3, PMI
+     * conversion T7) — so after any write whose intent includes registration,
+     * read the meeting back and fail the Moodle save loudly on a mismatch.
+     * Also fails when a scheduled meeting came back PMI-converted (host
+     * use_pmi_for_scheduled_meetings drift), which kills registration too.
+     *
+     * @param stdClass $zoom The meeting as intended by Moodle.
+     * @param array $data The request payload sent to Zoom (intent).
+     * @param string|int|null $meetingid The Zoom meeting ID to read back (null skips verification).
+     * @return void
+     * @throws moodle_exception When the read-back does not match the registration intent.
+     */
+    private function verify_readback($zoom, $data, $meetingid) {
+        if (empty($meetingid)) {
+            return;
+        }
+
+        $wantsregistration = isset($data['settings']['approval_type'])
+            && in_array($data['settings']['approval_type'], [ZOOM_REGISTRATION_AUTOMATIC, ZOOM_REGISTRATION_MANUAL]);
+        if (!$wantsregistration) {
+            return;
+        }
+
+        $readback = $this->get_meeting_webinar_info($meetingid, !empty($zoom->webinar));
+
+        $approvaltype = $readback->settings->approval_type ?? ZOOM_REGISTRATION_OFF;
+        $registrationdropped = empty($readback->registration_url)
+            || $approvaltype != $data['settings']['approval_type'];
+
+        // A scheduled meeting converted to the host's PMI (Zoom meeting type 4,
+        // no plugin constant) loses registration as well.
+        $pmiconverted = (($readback->type ?? 0) == 4);
+
+        if ($registrationdropped || $pmiconverted) {
+            error_log('mod_zoom_seat_alert reason=registration-dropped host=' . $zoom->host_id
+                . ' meeting=' . $meetingid);
+            throw new moodle_exception('zoomerr_registration_dropped', 'mod_zoom');
+        }
     }
 
     /**
