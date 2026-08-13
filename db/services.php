@@ -25,7 +25,7 @@
  * @since      Moodle 3.1
  */
 
-defined('MOODLE_INTERNAL') || die;
+defined('MOODLE_INTERNAL') || die();
 
 $functions = [
     'mod_zoom_get_state' => [
