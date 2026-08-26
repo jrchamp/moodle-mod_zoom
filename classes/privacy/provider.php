@@ -78,6 +78,14 @@ class provider implements core_userlist_provider, metadata_provider, request_plu
             'privacy:metadata:zoom_breakout_participants'
         );
 
+        // Personal data is transmitted to the external Zoom service.
+        $coll->add_external_location_link('zoom', [
+            'email' => 'privacy:metadata:zoom:email',
+            'firstname' => 'privacy:metadata:zoom:firstname',
+            'lastname' => 'privacy:metadata:zoom:lastname',
+            'name' => 'privacy:metadata:zoom:name',
+        ], 'privacy:metadata:zoom');
+
         return $coll;
     }
 

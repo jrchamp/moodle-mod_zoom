@@ -153,7 +153,7 @@ final class mod_zoom_provider_test extends provider_testcase {
         $newcollection = provider::get_metadata($collection);
         $itemcollection = $newcollection->get_collection();
 
-        $this->assertCount(4, $itemcollection);
+        $this->assertCount(5, $itemcollection);
         $table = reset($itemcollection);
         $table2 = $itemcollection[1];
         $table3 = $itemcollection[2];
