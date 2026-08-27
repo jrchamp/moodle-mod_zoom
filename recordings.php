@@ -132,7 +132,7 @@ if (empty($recordings)) {
         }
 
         // Output only one row per grouping.
-        $table->data[] = [$recordingdate, $recordinghtml, htmlspecialchars($recordingpasscode), $recordingshowhtml];
+        $table->data[] = [$recordingdate, $recordinghtml, s($recordingpasscode), $recordingshowhtml];
     }
 }
 
