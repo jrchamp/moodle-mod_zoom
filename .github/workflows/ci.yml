@@ -84,7 +84,6 @@ jobs:
         env:
           DB: ${{ matrix.database }}
           MOODLE_BRANCH: ${{ matrix.moodle-branch }}
-          MUSTACHE_IGNORE_NAMES: 'mobile_view_page_latest.mustache,mobile_view_page_ionic3.mustache'
           # Uncomment this to run Behat tests using the Moodle App.
           # MOODLE_APP: 'true'
 
