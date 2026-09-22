@@ -1273,11 +1273,10 @@ function zoom_get_user_settings($identifier) {
  *
  * @param string $meetingid Zoom meeting ID.
  * @param bool $iswebinar If the session is a webinar.
- * @return stdClass Returns a Zoom object containing the registrants (if found).
+ * @return array Returns the registrants for the meeting or webinar (if found).
  */
 function zoom_get_meeting_registrants($meetingid, $iswebinar) {
-    $response = zoom_webservice()->get_meeting_registrants($meetingid, $iswebinar);
-    return $response;
+    return zoom_webservice()->get_meeting_registrants($meetingid, $iswebinar);
 }
 
 /**
@@ -1302,12 +1301,10 @@ function zoom_is_user_registered_for_meeting($useremail, $meetingid, $iswebinar)
  * @return string|false Returns the join url for the user (based on email address) for the specified meeting (if found).
  */
 function zoom_get_registrant_join_url($useremail, $meetingid, $iswebinar) {
-    $response = zoom_get_meeting_registrants($meetingid, $iswebinar);
-    if (isset($response->registrants)) {
-        foreach ($response->registrants as $registrant) {
-            if (strcasecmp($useremail, $registrant->email) == 0) {
-                return $registrant->join_url;
-            }
+    $registrants = zoom_get_meeting_registrants($meetingid, $iswebinar);
+    foreach ($registrants as $registrant) {
+        if (strcasecmp($useremail, $registrant->email) == 0) {
+            return $registrant->join_url;
         }
     }
 

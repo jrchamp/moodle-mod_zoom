@@ -1384,7 +1384,7 @@ class webservice {
      *
      * @param string $id The meeting_id or webinar_id of the meeting or webinar to retrieve.
      * @param bool $webinar Whether the meeting or webinar whose information you want is a webinar.
-     * @return stdClass The meeting's or webinar's information.
+     * @return array The meeting's or webinar's registrants.
      */
     public function get_meeting_registrants($id, $webinar) {
         // Classic: meeting:read:admin.
@@ -1392,8 +1392,7 @@ class webservice {
         // Classic: webinar:read:admin.
         // Granular: webinar:read:list_registrants:admin.
         $url = ($webinar ? 'webinars/' : 'meetings/') . $id . '/registrants';
-        $response = $this->make_call($url);
-        return $response;
+        return $this->make_paginated_call($url, [], 'registrants');
     }
 
     /**
