@@ -828,7 +828,11 @@ class mod_zoom_mod_form extends moodleform_mod {
         if (!empty($this->_instance) && class_exists('\\core_grades\\component_gradeitems')) {
             $zoom = $DB->get_record('zoom', ['id' => $this->_instance]);
             if ($zoom && \mod_zoom\grades\occurrences::applies($zoom)) {
-                $gradefieldname = \core_grades\component_gradeitems::get_field_name_for_itemnumber($component, $itemnumber, 'grade');
+                $gradefieldname = \core_grades\component_gradeitems::get_field_name_for_itemnumber(
+                    $component,
+                    $itemnumber,
+                    'grade'
+                );
                 $mform->getElement($gradefieldname)->currentgrade = $zoom->grade;
             }
         }

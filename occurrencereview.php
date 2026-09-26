@@ -26,6 +26,7 @@ require(__DIR__ . '/../../config.php');
 require_once(__DIR__ . '/lib.php');
 require_once(__DIR__ . '/locallib.php');
 
+require_login();
 [$course, $cm, $zoom] = zoom_get_instance_setup();
 
 $context = context_module::instance($cm->id);

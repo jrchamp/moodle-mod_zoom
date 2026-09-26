@@ -330,7 +330,8 @@ class occurrences {
                 $ends = [];
                 foreach ($events as $event) {
                     $ends[(int) $event->timestart] = (int) $event->timestart + (int) $event->timeduration;
-                    if (!$DB->record_exists('zoom_grade_occurrences', ['zoomid' => $zoom->id, 'occurrencetime' => $event->timestart])) {
+                    $conditions = ['zoomid' => $zoom->id, 'occurrencetime' => $event->timestart];
+                    if (!$DB->record_exists('zoom_grade_occurrences', $conditions)) {
                         self::get_or_create_occurrence($zoom, (int) $event->timestart);
                         $seeded++;
                         $changed = true;
@@ -483,7 +484,12 @@ class occurrences {
                     break;
 
                 case 'merge':
-                    $target = $DB->get_record('zoom_grade_occurrences', ['id' => $targetid, 'zoomid' => $zoom->id], '*', MUST_EXIST);
+                    $target = $DB->get_record(
+                        'zoom_grade_occurrences',
+                        ['id' => $targetid, 'zoomid' => $zoom->id],
+                        '*',
+                        MUST_EXIST
+                    );
                     if ($target->id == $occurrence->id || !empty($target->flaggedforreview)) {
                         throw new \moodle_exception('occurrenceinvalidtarget', 'mod_zoom');
                     }
@@ -642,8 +648,10 @@ class occurrences {
         global $DB;
 
         $occurrence = $DB->get_record('zoom_grade_occurrences', ['zoomid' => $zoom->id, 'occurrencetime' => $occurrencetime]);
-        if (!$occurrence || $occurrence->reportstart !== null || !empty($occurrence->flaggedforreview)
-                || !empty($occurrence->timeclosed)) {
+        if (
+            !$occurrence || $occurrence->reportstart !== null || !empty($occurrence->flaggedforreview)
+            || !empty($occurrence->timeclosed)
+        ) {
             return null;
         }
 
