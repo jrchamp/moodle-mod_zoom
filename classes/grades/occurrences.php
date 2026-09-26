@@ -18,7 +18,7 @@
  * Cumulative grading of the occurrences of recurring meetings.
  *
  * @package    mod_zoom
- * @copyright  2026 Moodle Zoom plugin contributors
+ * @copyright  2026 Mezbaur Are Rafi
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
@@ -130,7 +130,7 @@ class occurrences {
 
         $lock = self::lock($zoom);
         try {
-            $occurrence = self::get_or_create_occurrence($zoom, $occurrencetime);
+            $occurrence = self::get_or_create_occurrence($zoom, $occurrencetime, [], $created);
 
             // A user is credited once per occurrence, so joining again changes nothing.
             $score = $DB->get_record('zoom_grade_occurrence_users', ['occurrenceid' => $occurrence->id, 'userid' => $userid]);
@@ -145,7 +145,9 @@ class occurrences {
                 return;
             }
 
-            self::write_grades($zoom);
+            // A new occurrence raises the maximum, so every grade is written again. Otherwise the
+            // maximum is unchanged and only the joining user's grade is.
+            self::write_grades($zoom, $created ? null : $userid);
         } finally {
             self::release($lock);
         }
@@ -205,58 +207,11 @@ class occurrences {
     }
 
     /**
-     * Get the meeting reports of an attendance duration occurrence.
-     *
-     * These are the reports the clustering rule assigns to the occurrence, so a report is never
-     * counted in two occurrences.
-     *
-     * @param stdClass $zoom instance object
-     * @param stdClass $occurrence record of the zoom_grade_occurrences table
-     * @return stdClass[] records of the zoom_meeting_details table, keyed by id
-     */
-    public static function get_occurrence_reports(stdClass $zoom, stdClass $occurrence) {
-        global $DB;
-
-        $tolerance = self::get_tolerance();
-        $candidates = $DB->get_records_select(
-            'zoom_meeting_details',
-            'zoomid = ? AND start_time <= ? AND end_time >= ?',
-            [$zoom->id, $occurrence->reportend + $tolerance, $occurrence->reportstart - $tolerance],
-            'start_time ASC',
-            'id, start_time, end_time'
-        );
-
-        $reports = [];
-        foreach ($candidates as $report) {
-            $owner = self::find_report_occurrence($zoom, (int) $report->start_time, (int) $report->end_time);
-            if ($owner && $owner->id == $occurrence->id) {
-                $reports[$report->id] = $report;
-            }
-        }
-
-        return $reports;
-    }
-
-    /**
-     * Get how long a set of meeting reports lasted, counting the time they overlap only once.
-     *
-     * @param stdClass[] $reports records with start_time and end_time
-     * @return int
-     */
-    public static function get_reports_duration(array $reports) {
-        $intervals = [];
-        foreach ($reports as $report) {
-            $intervals[] = [(int) $report->start_time, (int) $report->end_time];
-        }
-
-        return self::union_length($intervals);
-    }
-
-    /**
      * Store the scores of an attendance duration occurrence, close it, and rewrite the grades.
      *
-     * The scores replace any the users had, including the 0 of an absence, so a report that
-     * arrives late corrects the occurrence.
+     * A user keeps the highest score any report of the occurrence gave them, so rejoining a
+     * restarted meeting never lowers a score, and a report that arrives late raises the 0 of an
+     * absence.
      *
      * @param stdClass $zoom instance object
      * @param stdClass $occurrence record of the zoom_grade_occurrences table
@@ -272,7 +227,14 @@ class occurrences {
         try {
             $occurrence = $DB->get_record('zoom_grade_occurrences', ['id' => $occurrence->id], '*', MUST_EXIST);
             foreach ($scores as $userid => $score) {
-                self::set_score($occurrence, $userid, min(1, max(0, $score)));
+                $score = min(1, max(0, $score));
+                $params = ['occurrenceid' => $occurrence->id, 'userid' => $userid];
+                $existing = $DB->get_record('zoom_grade_occurrence_users', $params);
+                if ($existing && $existing->score >= $score) {
+                    continue;
+                }
+
+                self::set_score($occurrence, $userid, $score, $existing);
             }
 
             // The meeting has ended, so the users who did not attend it are given 0.
@@ -747,11 +709,13 @@ class occurrences {
      * @param stdClass $zoom instance object
      * @param int $occurrencetime start of the occurrence
      * @param array $fields other fields of a new occurrence
+     * @param bool|null $created set to whether this call recorded the occurrence
      * @return stdClass record of the zoom_grade_occurrences table
      */
-    protected static function get_or_create_occurrence(stdClass $zoom, $occurrencetime, array $fields = []) {
+    protected static function get_or_create_occurrence(stdClass $zoom, $occurrencetime, array $fields = [], &$created = null) {
         global $DB;
 
+        $created = false;
         $conditions = ['zoomid' => $zoom->id, 'occurrencetime' => $occurrencetime];
         $occurrence = $DB->get_record('zoom_grade_occurrences', $conditions);
         if ($occurrence) {
@@ -768,6 +732,7 @@ class occurrences {
 
         try {
             $occurrence->id = $DB->insert_record('zoom_grade_occurrences', $occurrence);
+            $created = true;
         } catch (dml_write_exception $e) {
             // Recorded by a concurrent request in the meantime.
             $occurrence = $DB->get_record('zoom_grade_occurrences', $conditions, '*', MUST_EXIST);
@@ -861,24 +826,35 @@ class occurrences {
      * a grade given against the old one. A user who has a grade but no occurrence scores is passed
      * without a raw grade, which keeps their grade and updates its maximum.
      *
+     * When only one user's scores changed and the maximum did not, only that user's grade needs
+     * writing, as every other grade is already stored against the current maximum.
+     *
      * Must be called while holding the lock of the instance.
      *
      * @param stdClass $zoom instance object
+     * @param int|null $userid the only user whose grade to write, null for every user
      * @return void
      */
-    protected static function write_grades(stdClass $zoom) {
+    protected static function write_grades(stdClass $zoom, $userid = null) {
         global $DB;
 
         $zoom = $DB->get_record('zoom', ['id' => $zoom->id], '*', MUST_EXIST);
+
+        $userselect = '';
+        $params = [$zoom->id];
+        if ($userid !== null) {
+            $userselect = 'AND u.userid = ?';
+            $params[] = $userid;
+        }
 
         $sql = "SELECT u.userid,
                        SUM(CASE WHEN o.flaggedforreview IS NULL THEN u.score ELSE 0 END) AS score
                   FROM {zoom_grade_occurrence_users} u
                   JOIN {zoom_grade_occurrences} o ON o.id = u.occurrenceid
-                 WHERE o.zoomid = ?
+                 WHERE o.zoomid = ? $userselect
               GROUP BY u.userid";
         $grades = [];
-        foreach ($DB->get_records_sql($sql, [$zoom->id]) as $total) {
+        foreach ($DB->get_records_sql($sql, $params) as $total) {
             $grades[$total->userid] = [
                 'userid' => $total->userid,
                 'rawgrade' => $zoom->grade * $total->score,
@@ -892,7 +868,7 @@ class occurrences {
             'itemnumber' => 0,
             'courseid' => $zoom->course,
         ]);
-        if ($gradeitem) {
+        if ($gradeitem && $userid === null) {
             foreach (\grade_grade::fetch_all(['itemid' => $gradeitem->id]) ?: [] as $gradegrade) {
                 if (!isset($grades[$gradegrade->userid])) {
                     $grades[$gradegrade->userid] = ['userid' => $gradegrade->userid];
@@ -940,34 +916,6 @@ class occurrences {
         }
 
         return (new info_module($cm))->filter_user_list($users);
-    }
-
-    /**
-     * Get the length of the union of a list of intervals.
-     *
-     * @param array $intervals pairs of start and end times
-     * @return int
-     */
-    protected static function union_length(array $intervals) {
-        usort($intervals, function ($a, $b) {
-            return $a[0] <=> $b[0];
-        });
-
-        $total = 0;
-        $coveredto = null;
-        foreach ($intervals as [$start, $end]) {
-            if ($coveredto !== null) {
-                $start = max($start, $coveredto);
-            }
-
-            if ($end > $start) {
-                $total += $end - $start;
-            }
-
-            $coveredto = $coveredto === null ? $end : max($coveredto, $end);
-        }
-
-        return $total;
     }
 
     /**

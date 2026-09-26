@@ -1048,14 +1048,6 @@ function xmldb_zoom_upgrade($oldversion) {
         $table->add_index('zoomid_occurrencetime', XMLDB_INDEX_UNIQUE, ['zoomid', 'occurrencetime']);
         if (!$dbman->table_exists($table)) {
             $dbman->create_table($table);
-        } else {
-            // Add any field a table of the same name lacks, without touching its data.
-            foreach (['reportstart', 'reportend', 'flaggedforreview'] as $fieldname) {
-                $field = new xmldb_field($fieldname, XMLDB_TYPE_INTEGER, $fieldname === 'flaggedforreview' ? '10' : '12');
-                if (!$dbman->field_exists($table, $field)) {
-                    $dbman->add_field($table, $field);
-                }
-            }
         }
 
         // Define table zoom_grade_occurrence_users to be created.

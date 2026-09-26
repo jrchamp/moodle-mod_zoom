@@ -18,7 +18,7 @@
  * The task that records and closes the occurrences of cumulatively graded meetings.
  *
  * @package    mod_zoom
- * @copyright  2026 Moodle Zoom plugin contributors
+ * @copyright  2026 Mezbaur Are Rafi
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 

@@ -666,8 +666,8 @@ class get_meeting_reports extends scheduled_task {
         // Not like those on 'zoom' table which represent the settings from zoom activity.
         $meetingtime = $DB->get_record('zoom_meeting_details', ['id' => $detailsid], 'start_time, end_time');
 
-        // An occurrence of a cumulatively graded meeting adds to the grade of the earlier ones. All the
-        // reports of the occurrence count together, as a meeting that was restarted has more than one.
+        // An occurrence of a cumulatively graded meeting adds to the grade of the earlier ones. Each report
+        // is graded as before, and its scores count for the occurrence it belongs to.
         $cumulative = \mod_zoom\grades\occurrences::applies($zoomrecord);
         if ($cumulative) {
             $occurrence = \mod_zoom\grades\occurrences::get_report_occurrence($zoomrecord, $detailsid);
@@ -676,27 +676,19 @@ class get_meeting_reports extends scheduled_task {
             }
 
             $grademax = $zoomrecord->grade;
-            $reports = \mod_zoom\grades\occurrences::get_occurrence_reports($zoomrecord, $occurrence);
-            $meetingduration = \mod_zoom\grades\occurrences::get_reports_duration($reports);
-            if ($meetingduration <= 0) {
-                return;
-            }
-
-            [$insql, $inparams] = $DB->get_in_or_equal(array_keys($reports));
-            $records = $DB->get_records_select('zoom_meeting_participants', "detailsid $insql", $inparams, 'join_time ASC');
             $scores = [];
-        } else {
-            if (empty($zoomrecord->recurring)) {
-                $end = min($meetingtime->end_time, $zoomrecord->start_time + $zoomrecord->duration);
-                $start = max($meetingtime->start_time, $zoomrecord->start_time);
-                $meetingduration = $end - $start;
-            } else {
-                $meetingduration = $meetingtime->end_time - $meetingtime->start_time;
-            }
-
-            // Get the required records again.
-            $records = $DB->get_records('zoom_meeting_participants', ['detailsid' => $detailsid], 'join_time ASC');
         }
+
+        if (empty($zoomrecord->recurring)) {
+            $end = min($meetingtime->end_time, $zoomrecord->start_time + $zoomrecord->duration);
+            $start = max($meetingtime->start_time, $zoomrecord->start_time);
+            $meetingduration = $end - $start;
+        } else {
+            $meetingduration = $meetingtime->end_time - $meetingtime->start_time;
+        }
+
+        // Get the required records again.
+        $records = $DB->get_records('zoom_meeting_participants', ['detailsid' => $detailsid], 'join_time ASC');
         // Initialize the data arrays, indexing them later with userids.
         $durations = [];
         $join = [];
@@ -765,12 +757,12 @@ class get_meeting_reports extends scheduled_task {
 
                 // Check if the user is enrolled before assign the grade.
                 if ($cumulative && is_enrolled($context, $userid)) {
-                    // The score replaces the one the user had for the occurrence, so a late report corrects it.
+                    // The occurrence keeps the user's highest score, so a later report can raise it but not lower it.
                     $scores[$userid] = $newgrade / $grademax;
                     $graded++;
                     $this->debugmsg('occurrence score updated for user with id: ' . $userid
                                     . ', duration =' . $userduration
-                                    . ', occurrence duration =' . $meetingduration
+                                    . ', report duration =' . $meetingduration
                                     . ', User grade:' . $newgrade);
                 } else if (is_enrolled($context, $userid)) {
                     // Compare with the old grade and only update if the new grade is higher.

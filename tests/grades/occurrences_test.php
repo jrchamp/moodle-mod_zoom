@@ -18,7 +18,7 @@
  * Unit tests for cumulative grading of recurring meetings.
  *
  * @package    mod_zoom
- * @copyright  2026 Moodle Zoom plugin contributors
+ * @copyright  2026 Mezbaur Are Rafi
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
@@ -529,6 +529,100 @@ final class occurrences_test extends advanced_testcase {
         $this->assertCount(1, $rows);
         $this->assertEquals(1, $DB->count_records('zoom_grade_occurrence_users', ['occurrenceid' => $rows[0]->id]));
         $this->assertEquals([100.0, 100.0], $this->grade($zoom, $student->id));
+
+        // Joining again does not even write the grade.
+        $itemid = $this->grade_item($zoom)->id;
+        $DB->set_field('grade_grades', 'rawgrade', 55, ['itemid' => $itemid, 'userid' => $student->id]);
+        $this->join($zoom, $student->id);
+        $this->assertEquals(55, $DB->get_field('grade_grades', 'rawgrade', ['itemid' => $itemid, 'userid' => $student->id]));
+    }
+
+    /**
+     * The activity grade item of a meeting.
+     *
+     * @param stdClass $zoom
+     * @return grade_item
+     */
+    private function grade_item(stdClass $zoom) {
+        return grade_item::fetch([
+            'itemtype' => 'mod',
+            'itemmodule' => 'zoom',
+            'iteminstance' => $zoom->id,
+            'itemnumber' => 0,
+            'courseid' => $this->course->id,
+        ]);
+    }
+
+    /**
+     * A join that records an occurrence writes every grade; a join to a recorded one writes only the joiner's.
+     */
+    public function test_join_writes_all_grades_only_for_a_new_occurrence(): void {
+        global $DB;
+
+        $a = $this->student();
+        $b = $this->student();
+        $first = $this->now - 3 * HOURSECS;
+        $second = $this->now + 5 * MINSECS;
+        $zoom = $this->create_meeting([[1, $first, 1800], [2, $second, 1800]], 'entry', 100, $this->now - DAYSECS);
+
+        // The first join records the occurrence.
+        $this->join($zoom, $a->id, $first);
+        $itemid = $this->grade_item($zoom)->id;
+        $this->assertEquals(100.0, (float) $this->grade_item($zoom)->grademax);
+        $rawgrade = function ($user) use ($DB, $itemid) {
+            $grade = $DB->get_record('grade_grades', ['itemid' => $itemid, 'userid' => $user->id], '*', MUST_EXIST);
+            return [(float) $grade->rawgrade, (float) $grade->rawgrademax];
+        };
+        $this->assertEquals([100.0, 100.0], $rawgrade($a));
+
+        // Change student a's stored grade, so that writing it again would show.
+        $DB->set_field('grade_grades', 'rawgrade', 55, ['itemid' => $itemid, 'userid' => $a->id]);
+
+        // Student b joins the same occurrence: only b's grade is written, against the unchanged maximum.
+        $this->join($zoom, $b->id, $first);
+        $this->assertEquals([55.0, 100.0], $rawgrade($a));
+        $this->assertEquals([100.0, 100.0], $rawgrade($b));
+        $this->assertEquals(100.0, (float) $this->grade_item($zoom)->grademax);
+
+        // Student b's join records the next occurrence: the maximum grows and every grade is written again.
+        $this->join($zoom, $b->id, $second);
+        $this->assertEquals(200.0, (float) $this->grade_item($zoom)->grademax);
+        $this->assertEquals([100.0, 200.0], $rawgrade($a));
+        $this->assertEquals([200.0, 200.0], $rawgrade($b));
+        $this->assertEquals([200.0, 100.0], $this->grade($zoom, $a->id));
+        $this->assertEquals([200.0, 200.0], $this->grade($zoom, $b->id));
+    }
+
+    /**
+     * Overridden and locked grades keep their values on both kinds of join.
+     */
+    public function test_join_keeps_overridden_and_locked_grades(): void {
+        $a = $this->student();
+        $b = $this->student();
+        $c = $this->student();
+        $first = $this->now - 3 * HOURSECS;
+        $second = $this->now + 5 * MINSECS;
+        $zoom = $this->create_meeting([[1, $first, 1800], [2, $second, 1800]], 'entry', 100, $this->now - DAYSECS);
+        $this->join($zoom, $a->id, $first);
+        $this->join($zoom, $b->id, $first);
+
+        $item = $this->grade_item($zoom);
+        $item->update_final_grade($a->id, 42, 'test');
+        grade_grade::fetch(['itemid' => $item->id, 'userid' => $b->id])->set_locked(1);
+
+        // A join to the recorded occurrence.
+        $this->join($zoom, $c->id, $first);
+        $this->assertEquals([100.0, 42.0], $this->grade($zoom, $a->id));
+        $this->assertEquals([100.0, 100.0], $this->grade($zoom, $b->id));
+        $this->assertEquals([100.0, 100.0], $this->grade($zoom, $c->id));
+
+        // A join that records a new occurrence and writes every grade.
+        $this->join($zoom, $a->id, $second);
+        $this->assertEquals([200.0, 42.0], $this->grade($zoom, $a->id));
+        $this->assertEquals([200.0, 100.0], $this->grade($zoom, $b->id));
+        $this->assertEquals([200.0, 100.0], $this->grade($zoom, $c->id));
+        $this->assertTrue(grade_grade::fetch(['itemid' => $item->id, 'userid' => $a->id])->is_overridden() > 0);
+        $this->assertTrue((bool) grade_grade::fetch(['itemid' => $item->id, 'userid' => $b->id])->is_locked());
     }
 
     /**
@@ -695,7 +789,7 @@ final class occurrences_test extends advanced_testcase {
     }
 
     /**
-     * A late report of the same session corrects the 0 an absent student was given.
+     * A late report of the same session corrects the 0 an absent student was given, and leaves the students who are not in it.
      */
     public function test_duration_late_report_corrects_zero(): void {
         $a = $this->student();
@@ -713,14 +807,14 @@ final class occurrences_test extends advanced_testcase {
         ]);
 
         $this->assertCount(1, $this->rows($zoom));
-        $this->assertEquals([100.0, 50.0], $this->grade($zoom, $a->id));
-        $this->assertEquals([100.0, 25.0], $this->grade($zoom, $b->id));
+        $this->assertEquals([100.0, 100.0], $this->grade($zoom, $a->id));
+        $this->assertEquals([100.0, 50.0], $this->grade($zoom, $b->id));
     }
 
     /**
-     * Overlapping reports of one session are combined, not counted twice.
+     * Overlapping reports of one session belong to one occurrence, which is counted once.
      */
-    public function test_duration_reports_are_unioned(): void {
+    public function test_duration_overlapping_reports_share_one_occurrence(): void {
         $a = $this->student();
         $start = $this->now - 5 * HOURSECS;
         $zoom = $this->create_meeting([[1, $start, 3600]], 'period');
@@ -750,13 +844,101 @@ final class occurrences_test extends advanced_testcase {
         $this->assertCount(1, $rows);
         $this->assertEquals($start + 2400, $rows[0]->occurrencetime, 'The occurrence keeps the time it was created with');
         $this->assertEquals($start, $rows[0]->reportstart);
-        // Attended 30 + 20 of the 50 minutes the reports cover.
+        // Each report is graded on its own, and the student attended all of both.
         $this->assertEquals([100.0, 100.0], $this->grade($zoom, $a->id));
 
         // The next day's session is a separate occurrence.
         $this->report($zoom, 'next', $start + DAYSECS - HOURSECS, $start + DAYSECS, []);
         $this->assertCount(2, $this->rows($zoom));
         $this->assertEquals([200.0, 100.0], $this->grade($zoom, $a->id));
+    }
+
+    /**
+     * A report of a restarted meeting is graded on its own, so a student who left before the restart keeps their score.
+     *
+     * Both reports of the session belong to one occurrence, so the maximum grows by one occurrence, not two.
+     */
+    public function test_duration_restarted_meeting(): void {
+        global $DB;
+
+        $a = $this->student();
+        $b = $this->student();
+        $previous = $this->now - DAYSECS - 3 * HOURSECS;
+        $start = $this->now - 3 * HOURSECS;
+        $zoom = $this->create_meeting([[1, $previous, 600], [2, $start, 600]], 'period', 70);
+
+        // The previous session.
+        $this->report($zoom, 'r87', $previous, $previous + 993, [
+            [$a->id, $previous, $previous + 991],
+            [$b->id, $previous + 75, $previous + 992],
+        ]);
+        [$max, $grade] = $this->grade($zoom, $a->id);
+        $this->assertEquals(70.0, $max);
+        $this->assertEqualsWithDelta(69.86, $grade, 0.01);
+        $this->assertEqualsWithDelta(64.64, $this->grade($zoom, $b->id)[1], 0.01);
+
+        // The first report of this session.
+        $this->report($zoom, 'r92', $start, $start + 799, [
+            [$b->id, $start, $start + 775],
+            [$a->id, $start + 1, $start + 798],
+        ]);
+        [$max, $grade] = $this->grade($zoom, $a->id);
+        $this->assertEquals(140.0, $max);
+        $this->assertEqualsWithDelta(139.68, $grade, 0.01);
+        $this->assertEqualsWithDelta(132.54, $this->grade($zoom, $b->id)[1], 0.01);
+
+        // The host restarted the meeting after a gap, and only b is in the report of the restart.
+        $restart = $start + 799 + 167;
+        $this->report($zoom, 'r93', $restart, $restart + 572, [[$b->id, $restart, $restart + 572]]);
+
+        $rows = $this->rows($zoom);
+        $this->assertCount(2, $rows, 'Both reports belong to one occurrence');
+        $this->assertEquals($start, $rows[1]->reportstart);
+        $this->assertEquals($restart + 572, $rows[1]->reportend);
+
+        // The score of a is not recalculated against the 799 + 572 seconds of both reports.
+        $score = $DB->get_field('zoom_grade_occurrence_users', 'score', ['occurrenceid' => $rows[1]->id, 'userid' => $a->id]);
+        $this->assertEqualsWithDelta(797 / 799, $score, 0.00001);
+        [$max, $grade] = $this->grade($zoom, $a->id);
+        $this->assertEquals(140.0, $max);
+        $this->assertEqualsWithDelta(139.68, $grade, 0.01);
+
+        // Student b keeps the higher of the two report scores.
+        $score = $DB->get_field('zoom_grade_occurrence_users', 'score', ['occurrenceid' => $rows[1]->id, 'userid' => $b->id]);
+        $this->assertEqualsWithDelta(1, $score, 0.00001);
+        $this->assertEqualsWithDelta(134.64, $this->grade($zoom, $b->id)[1], 0.01);
+    }
+
+    /**
+     * A student in more than one report of a session keeps the highest score, whatever order the reports arrive in.
+     *
+     * Rejoining a restarted meeting for a few minutes must not lower a score already earned.
+     */
+    public function test_duration_restarted_meeting_keeps_highest_score(): void {
+        $start = $this->now - 3 * HOURSECS;
+        $restart = $start + 799 + 167;
+        $full = 70 * 775 / 799;
+
+        // The full report first, then a short rejoin after the restart.
+        $a = $this->student();
+        $zoom = $this->create_meeting([[1, $start, 600]], 'period', 70);
+        $this->report($zoom, 'r1', $start, $start + 799, [[$a->id, $start, $start + 775]]);
+        $this->report($zoom, 'r2', $restart, $restart + 572, [[$a->id, $restart, $restart + 286]]);
+
+        $this->assertCount(1, $this->rows($zoom));
+        [$max, $grade] = $this->grade($zoom, $a->id);
+        $this->assertEquals(70.0, $max);
+        $this->assertEqualsWithDelta($full, $grade, 0.01);
+
+        // The same reports in the other order give the same grade.
+        $b = $this->student();
+        $other = $this->create_meeting([[1, $start, 600]], 'period', 70);
+        $this->report($other, 'o2', $restart, $restart + 572, [[$b->id, $restart, $restart + 286]]);
+        $this->assertEqualsWithDelta(35.0, $this->grade($other, $b->id)[1], 0.01);
+        $this->report($other, 'o1', $start, $start + 799, [[$b->id, $start, $start + 775]]);
+
+        $this->assertCount(1, $this->rows($other));
+        $this->assertEqualsWithDelta($full, $this->grade($other, $b->id)[1], 0.01);
     }
 
     /**
@@ -880,9 +1062,10 @@ final class occurrences_test extends advanced_testcase {
      * Back up and restore the course, with or without user data.
      *
      * @param bool $users
+     * @param int $shift seconds to move the course start date by in the restore
      * @return int id of the new course
      */
-    private function backup_and_restore($users) {
+    private function backup_and_restore($users, $shift = 0) {
         global $CFG, $USER;
 
         require_once($CFG->dirroot . '/backup/util/includes/backup_includes.php');
@@ -904,7 +1087,7 @@ final class occurrences_test extends advanced_testcase {
         $file = $results['backup_destination'];
         $bc->destroy();
 
-        $folder = 'zoomtest' . ($users ? 'users' : 'nousers');
+        $folder = 'zoomtest' . ($users ? 'users' : 'nousers') . $shift;
         $file->extract_to_pathname(get_file_packer('application/vnd.moodle.backup'), $CFG->tempdir . '/backup/' . $folder);
 
         $newcourseid = \restore_dbops::create_new_course('Restored', 'R' . (int) $users, $this->course->category);
@@ -917,6 +1100,10 @@ final class occurrences_test extends advanced_testcase {
             backup::TARGET_NEW_COURSE
         );
         $rc->get_plan()->get_setting('users')->set_value($users);
+        if ($shift) {
+            $rc->get_plan()->get_setting('course_startdate')->set_value($this->course->startdate + $shift);
+        }
+
         $this->assertTrue($rc->execute_precheck());
         $rc->execute_plan();
         $rc->destroy();
@@ -954,6 +1141,42 @@ final class occurrences_test extends advanced_testcase {
     }
 
     /**
+     * A restore that shifts the course dates moves the cumulative grading start with the occurrences.
+     */
+    public function test_backup_restore_with_date_shift(): void {
+        global $DB;
+
+        $student = $this->student();
+        $since = $this->now - DAYSECS;
+        $first = $this->now - 3 * HOURSECS;
+        $zoom = $this->create_meeting(
+            [[1, $first, 1800], [2, $this->now + DAYSECS, 1800]],
+            'entry',
+            100,
+            $since
+        );
+        $DB->set_field('zoom', 'name', 'Cumulative', ['id' => $zoom->id]);
+        $this->join($zoom, $student->id, $first);
+
+        // An activity that keeps the upstream grading must keep doing so.
+        $legacy = $this->create_meeting([[1, $this->now + DAYSECS, 1800]]);
+        $DB->set_field('zoom', 'cumulativegradingstart', null, ['id' => $legacy->id]);
+        $DB->set_field('zoom', 'name', 'Legacy', ['id' => $legacy->id]);
+
+        $shift = 7 * DAYSECS;
+        $newcourseid = $this->backup_and_restore(true, $shift);
+
+        $newzoom = $DB->get_record('zoom', ['course' => $newcourseid, 'name' => 'Cumulative'], '*', MUST_EXIST);
+        $this->assertEquals($since + $shift, $newzoom->cumulativegradingstart);
+        $occurrence = $DB->get_record('zoom_grade_occurrences', ['zoomid' => $newzoom->id], '*', MUST_EXIST);
+        $this->assertEquals($first + $shift, $occurrence->occurrencetime);
+        $this->assertGreaterThanOrEqual($newzoom->cumulativegradingstart, $occurrence->occurrencetime);
+
+        $newlegacy = $DB->get_record('zoom', ['course' => $newcourseid, 'name' => 'Legacy'], '*', MUST_EXIST);
+        $this->assertNull($newlegacy->cumulativegradingstart);
+    }
+
+    /**
      * Backup and restore without user data start from no occurrences and one occurrence's points.
      */
     public function test_backup_restore_without_users(): void {
@@ -987,8 +1210,11 @@ final class occurrences_test extends advanced_testcase {
         require_once($CFG->dirroot . '/course/modlib.php');
         require_once($CFG->dirroot . '/mod/zoom/mod_form.php');
 
-        $mockresponses = new \ReflectionProperty(\curl::class, 'mockresponses');
-        for ($i = 0; $i < 20; $i++) {
+        // The curl mock serves the last queued response first, so the sentinel queued first comes out last.
+        $sentinel = '{"sentinel":true}';
+        $queued = 20;
+        \curl::mock_response($sentinel);
+        for ($i = 0; $i < $queued; $i++) {
             \curl::mock_response($response);
         }
 
@@ -1002,9 +1228,32 @@ final class occurrences_test extends advanced_testcase {
             $PAGE->set_course($this->course);
             $PAGE->set_url('/course/modedit.php', ['update' => $cm->id]);
 
-            $form = new \mod_zoom_mod_form($data, $cw->section, $cm, $this->course);
-            $quickform = new \ReflectionProperty(\moodleform::class, '_form');
-            $element = $quickform->getValue($form)->getElement('grade');
+            // The real form, with access to its grade field.
+            $form = new class ($data, $cw->section, $cm, $this->course) extends \mod_zoom_mod_form {
+                /**
+                 * Name the module, as the class name does not give it.
+                 *
+                 * @param stdClass $current
+                 * @param int $section
+                 * @param stdClass $cm
+                 * @param stdClass $course
+                 */
+                public function __construct($current, $section, $cm, $course) {
+                    $this->_modname = 'zoom';
+                    parent::__construct($current, $section, $cm, $course);
+                }
+
+                /**
+                 * Get a field of the form.
+                 *
+                 * @param string $name
+                 * @return \HTML_QuickForm_element
+                 */
+                public function get_field($name) {
+                    return $this->_form->getElement($name);
+                }
+            };
+            $element = $form->get_field('grade');
             $this->assertTrue($element->hasgrades, 'Grades lock the maximum points');
             $submitted = ['grade' => ['modgrade_type' => 'point']];
             $data->grade = $element->exportValue($submitted)['grade'];
@@ -1013,7 +1262,13 @@ final class occurrences_test extends advanced_testcase {
             $data->introeditor = ['text' => '', 'format' => FORMAT_HTML, 'itemid' => file_get_unused_draft_itemid()];
             update_moduleinfo($cm, $data, $this->course);
         } finally {
-            $mockresponses->setValue(null, []);
+            // Use up the responses left over, so they cannot answer another test's requests.
+            $curl = new \curl();
+            for ($i = 0; $i <= $queued; $i++) {
+                if ($curl->get('https://zoom.invalid/') === $sentinel) {
+                    break;
+                }
+            }
         }
     }
 

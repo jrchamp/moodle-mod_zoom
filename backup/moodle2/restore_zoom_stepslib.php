@@ -73,6 +73,11 @@ class restore_activity_structure_step extends \restore_activity_structure_step {
         // Update start_time before attempting to create a new meeting.
         $data->start_time = $this->apply_date_offset($data->start_time);
 
+        // Keep the cumulative grading start in step with the occurrences, which move by the same offset.
+        if (!empty($data->cumulativegradingstart)) {
+            $data->cumulativegradingstart = $this->apply_date_offset($data->cumulativegradingstart);
+        }
+
         // Either create a new meeting or set meeting as expired.
         try {
             // FIXME: Do we provide course context? That won't have the right activity names etc.
