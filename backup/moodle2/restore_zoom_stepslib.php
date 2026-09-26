@@ -43,8 +43,18 @@ class restore_activity_structure_step extends \restore_activity_structure_step {
      */
     protected function define_structure() {
         $paths = [];
+        $userinfo = $this->get_setting_value('userinfo');
+
         $paths[] = new restore_path_element('zoom', '/activity/zoom');
         $paths[] = new restore_path_element('zoom_tracking_field', '/activity/zoom/trackingfields/trackingfield');
+
+        if ($userinfo) {
+            $paths[] = new restore_path_element('zoom_grade_occurrence', '/activity/zoom/gradeoccurrences/gradeoccurrence');
+            $paths[] = new restore_path_element(
+                'zoom_grade_occurrence_user',
+                '/activity/zoom/gradeoccurrences/gradeoccurrence/gradeoccurrenceusers/gradeoccurrenceuser'
+            );
+        }
 
         // Return the paths wrapped into standard activity structure.
         return $this->prepare_activity_structure($paths);
@@ -62,6 +72,11 @@ class restore_activity_structure_step extends \restore_activity_structure_step {
 
         // Update start_time before attempting to create a new meeting.
         $data->start_time = $this->apply_date_offset($data->start_time);
+
+        // Keep the cumulative grading start in step with the occurrences, which move by the same offset.
+        if (!empty($data->cumulativegradingstart)) {
+            $data->cumulativegradingstart = $this->apply_date_offset($data->cumulativegradingstart);
+        }
 
         // Either create a new meeting or set meeting as expired.
         try {
@@ -115,6 +130,52 @@ class restore_activity_structure_step extends \restore_activity_structure_step {
             $newitemid = $DB->insert_record('zoom_meeting_tracking_fields', $data);
             $this->set_mapping('zoom_tracking_field', $oldid, $newitemid);
         }
+    }
+
+    /**
+     * Process an occurrence of a recurring meeting.
+     *
+     * @param array $data
+     */
+    protected function process_zoom_grade_occurrence($data) {
+        global $DB;
+
+        $data = (object) $data;
+        $oldid = $data->id;
+
+        $data->zoomid = $this->get_new_parentid('zoom');
+        $data->occurrencetime = $this->apply_date_offset($data->occurrencetime);
+        $data->timecreated = $this->apply_date_offset($data->timecreated);
+        foreach (['reportstart', 'reportend', 'timeclosed', 'flaggedforreview'] as $field) {
+            if (isset($data->$field)) {
+                $data->$field = $this->apply_date_offset($data->$field);
+            }
+        }
+
+        $newitemid = $DB->insert_record('zoom_grade_occurrences', $data);
+        $this->set_mapping('zoom_grade_occurrence', $oldid, $newitemid);
+    }
+
+    /**
+     * Process the score of a user in an occurrence of a recurring meeting.
+     *
+     * @param array $data
+     */
+    protected function process_zoom_grade_occurrence_user($data) {
+        global $DB;
+
+        $data = (object) $data;
+
+        $data->occurrenceid = $this->get_new_parentid('zoom_grade_occurrence');
+        $data->userid = $this->get_mappingid('user', $data->userid);
+        if (empty($data->userid)) {
+            return;
+        }
+
+        $data->timecreated = $this->apply_date_offset($data->timecreated);
+        $data->timemodified = $this->apply_date_offset($data->timemodified);
+
+        $DB->insert_record('zoom_grade_occurrence_users', $data);
     }
 
     /**

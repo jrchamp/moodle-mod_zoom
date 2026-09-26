@@ -816,10 +816,26 @@ class mod_zoom_mod_form extends moodleform_mod {
      * @return void
      */
     public function standard_grading_coursemodule_elements() {
+        global $DB;
+
         parent::standard_grading_coursemodule_elements();
         $mform = $this->_form;
         $itemnumber = 0;
         $component = "mod_{$this->_modname}";
+
+        // A cumulative activity's grade item maximum is the points per occurrence times the occurrences, so when
+        // grades lock the grade field, the form must keep the points per occurrence rather than that maximum.
+        if (!empty($this->_instance) && class_exists('\\core_grades\\component_gradeitems')) {
+            $zoom = $DB->get_record('zoom', ['id' => $this->_instance]);
+            if ($zoom && \mod_zoom\grades\occurrences::applies($zoom)) {
+                $gradefieldname = \core_grades\component_gradeitems::get_field_name_for_itemnumber(
+                    $component,
+                    $itemnumber,
+                    'grade'
+                );
+                $mform->getElement($gradefieldname)->currentgrade = $zoom->grade;
+            }
+        }
         $options = [
             'entry' => get_string('gradingentry', 'mod_zoom'), // All credit upon entry.
             'period' => get_string('gradingperiod', 'mod_zoom'), // Credit according to attend duration.

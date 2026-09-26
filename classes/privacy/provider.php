@@ -78,6 +78,13 @@ class provider implements core_userlist_provider, metadata_provider, request_plu
             'privacy:metadata:zoom_breakout_participants'
         );
 
+        $coll->add_database_table('zoom_grade_occurrence_users', [
+            'userid' => 'privacy:metadata:zoom_grade_occurrence_users:userid',
+            'score' => 'privacy:metadata:zoom_grade_occurrence_users:score',
+            'timecreated' => 'privacy:metadata:zoom_grade_occurrence_users:timecreated',
+            'timemodified' => 'privacy:metadata:zoom_grade_occurrence_users:timemodified',
+        ], 'privacy:metadata:zoom_grade_occurrence_users');
+
         // Personal data is transmitted to the external Zoom service.
         $coll->add_external_location_link('zoom', [
             'email' => 'privacy:metadata:zoom:email',
@@ -120,6 +127,21 @@ class provider implements core_userlist_provider, metadata_provider, request_plu
         ];
 
         $contextlist->add_from_sql($sql, $params);
+
+        $sql = 'SELECT c.id
+                  FROM {context} c
+            INNER JOIN {course_modules} cm ON cm.id = c.instanceid AND c.contextlevel = :contextlevel
+            INNER JOIN {modules} m ON m.id = cm.module AND m.name = :modname
+            INNER JOIN {zoom_grade_occurrences} zgo ON zgo.zoomid = cm.instance
+            INNER JOIN {zoom_grade_occurrence_users} zgou ON zgou.occurrenceid = zgo.id
+                 WHERE zgou.userid = :userid
+        ';
+
+        $contextlist->add_from_sql($sql, [
+            'modname' => 'zoom',
+            'contextlevel' => CONTEXT_MODULE,
+            'userid' => $userid,
+        ]);
 
         return $contextlist;
     }
@@ -167,6 +189,15 @@ class provider implements core_userlist_provider, metadata_provider, request_plu
                   JOIN {zoom} z ON zmbr.zoomid = z.id
                   JOIN {modules} m ON m.name = :modulename
                   JOIN {course_modules} cm ON z.id = cm.instance AND m.id = cm.module
+                 WHERE cm.id = :instanceid";
+
+        $userlist->add_from_sql('userid', $sql, $params);
+
+        $sql = "SELECT zgou.userid
+                  FROM {zoom_grade_occurrence_users} zgou
+                  JOIN {zoom_grade_occurrences} zgo ON zgo.id = zgou.occurrenceid
+                  JOIN {modules} m ON m.name = :modulename
+                  JOIN {course_modules} cm ON zgo.zoomid = cm.instance AND m.id = cm.module
                  WHERE cm.id = :instanceid";
 
         $userlist->add_from_sql('userid', $sql, $params);
@@ -274,6 +305,46 @@ class provider implements core_userlist_provider, metadata_provider, request_plu
         }
 
         $recordingviewinstances->close();
+
+        $sql = "SELECT zgou.id,
+                       zgo.occurrencetime,
+                       zgou.score,
+                       zgou.timecreated,
+                       zgou.timemodified,
+                       cm.id AS cmid
+                  FROM {context} c
+            INNER JOIN {course_modules} cm ON cm.id = c.instanceid AND c.contextlevel = :contextlevel
+            INNER JOIN {modules} m ON m.id = cm.module AND m.name = :modname
+            INNER JOIN {zoom_grade_occurrences} zgo ON zgo.zoomid = cm.instance
+            INNER JOIN {zoom_grade_occurrence_users} zgou ON zgou.occurrenceid = zgo.id
+                 WHERE c.id $contextsql
+                       AND zgou.userid = :userid
+              ORDER BY cm.id ASC, zgo.occurrencetime ASC
+        ";
+
+        $params = [
+            'modname' => 'zoom',
+            'contextlevel' => CONTEXT_MODULE,
+            'userid' => $user->id,
+        ] + $contextparams;
+
+        $scores = [];
+        $occurrenceusers = $DB->get_recordset_sql($sql, $params);
+        foreach ($occurrenceusers as $occurrenceuser) {
+            $scores[$occurrenceuser->cmid][] = [
+                'occurrence' => transform::datetime($occurrenceuser->occurrencetime),
+                'score' => $occurrenceuser->score,
+                'timecreated' => transform::datetime($occurrenceuser->timecreated),
+                'timemodified' => transform::datetime($occurrenceuser->timemodified),
+            ];
+        }
+
+        $occurrenceusers->close();
+
+        foreach ($scores as $cmid => $occurrences) {
+            writer::with_context(context_module::instance($cmid))
+                ->export_data([get_string('privacy:gradeoccurrences', 'mod_zoom')], (object) ['occurrences' => $occurrences]);
+        }
     }
 
     /**
@@ -310,6 +381,12 @@ class provider implements core_userlist_provider, metadata_provider, request_plu
             }
 
             $DB->delete_records('zoom_meeting_breakout_rooms', ['zoomid' => $cm->instance]);
+
+            $DB->delete_records_select(
+                'zoom_grade_occurrence_users',
+                'occurrenceid IN (SELECT id FROM {zoom_grade_occurrences} WHERE zoomid = ?)',
+                [$cm->instance]
+            );
         }
     }
 
@@ -347,6 +424,12 @@ class provider implements core_userlist_provider, metadata_provider, request_plu
                 foreach ($breakoutrooms as $room) {
                     $DB->delete_records('zoom_breakout_participants', ['breakoutroomid' => $room->id, 'userid' => $user->id]);
                 }
+
+                $DB->delete_records_select(
+                    'zoom_grade_occurrence_users',
+                    'userid = ? AND occurrenceid IN (SELECT id FROM {zoom_grade_occurrences} WHERE zoomid = ?)',
+                    [$user->id, $cm->instance]
+                );
             }
         }
     }
@@ -398,5 +481,14 @@ class provider implements core_userlist_provider, metadata_provider, request_plu
                  WHERE ctx.id = :contextid";
 
         $DB->delete_records_select('zoom_breakout_participants', "userid $insql AND breakoutroomid IN ($sql)", $params);
+
+        $sql = "SELECT zgo.id
+                  FROM {zoom_grade_occurrences} zgo
+                  JOIN {modules} m ON m.name = 'zoom'
+                  JOIN {course_modules} cm ON zgo.zoomid = cm.instance AND m.id = cm.module
+                  JOIN {context} ctx ON ctx.instanceid = cm.id AND ctx.contextlevel = :modlevel
+                 WHERE ctx.id = :contextid";
+
+        $DB->delete_records_select('zoom_grade_occurrence_users', "userid $insql AND occurrenceid IN ($sql)", $params);
     }
 }
