@@ -968,4 +968,120 @@ final class occurrences_test extends advanced_testcase {
         $item = grade_item::fetch(['itemtype' => 'mod', 'itemmodule' => 'zoom', 'iteminstance' => $newzoom->id, 'itemnumber' => 0]);
         $this->assertEquals(100.0, (float) $item->grademax);
     }
+    /**
+     * Save a cumulative activity through the edit form path, as modedit.php does.
+     *
+     * The real form is built, so its grade field locks the maximum points because grades exist, and
+     * the field's value is taken from a submission that lacks the locked points, as a browser sends it.
+     * The activity is then saved with update_moduleinfo(). Zoom answers every call with $response.
+     *
+     * @param stdClass $zoom
+     * @param string $response JSON Zoom returns
+     * @param string $gradingmethod grading method to save
+     */
+    private function save_through_edit_form(stdClass $zoom, $response, $gradingmethod) {
+        global $CFG, $PAGE;
+
+        require_once($CFG->dirroot . '/course/modlib.php');
+        require_once($CFG->dirroot . '/mod/zoom/mod_form.php');
+
+        $mockresponses = new \ReflectionProperty(\curl::class, 'mockresponses');
+        for ($i = 0; $i < 20; $i++) {
+            \curl::mock_response($response);
+        }
+
+        try {
+            rebuild_course_cache($this->course->id, true);
+            $cm = get_coursemodule_from_instance('zoom', $zoom->id, 0, false, MUST_EXIST);
+            [$cm, , , $data, $cw] = get_moduleinfo_data($cm, $this->course);
+
+            // As require_login() in modedit.php does.
+            $PAGE = new \moodle_page();
+            $PAGE->set_course($this->course);
+            $PAGE->set_url('/course/modedit.php', ['update' => $cm->id]);
+
+            $form = new \mod_zoom_mod_form($data, $cw->section, $cm, $this->course);
+            $quickform = new \ReflectionProperty(\moodleform::class, '_form');
+            $element = $quickform->getValue($form)->getElement('grade');
+            $this->assertTrue($element->hasgrades, 'Grades lock the maximum points');
+            $submitted = ['grade' => ['modgrade_type' => 'point']];
+            $data->grade = $element->exportValue($submitted)['grade'];
+
+            $data->grading_method = $gradingmethod;
+            $data->introeditor = ['text' => '', 'format' => FORMAT_HTML, 'itemid' => file_get_unused_draft_itemid()];
+            update_moduleinfo($cm, $data, $this->course);
+        } finally {
+            $mockresponses->setValue(null, []);
+        }
+    }
+
+    /**
+     * Saving the activity through the edit form keeps the points per occurrence, however many times.
+     *
+     * The form's grade field is locked once grades exist and returns the grade item maximum, which for
+     * a cumulative activity is the points times the occurrences; saving that as the points compounded.
+     */
+    public function test_edit_form_save_keeps_points_per_occurrence(): void {
+        global $DB, $USER;
+
+        $student = $this->student();
+        $absent = $this->student();
+        $first = $this->now - 3 * HOURSECS;
+        $second = $this->now + 5 * MINSECS;
+        $zoom = $this->create_meeting([[1, $first, 1800], [2, $second, 1800]], 'entry', 100, $this->now - DAYSECS);
+        $this->join($zoom, $student->id, $first);
+        $this->join($zoom, $student->id, $second);
+        occurrences::seed_and_close();
+        $this->assertEquals([200.0, 200.0], $this->grade($zoom, $student->id));
+
+        // A configured Zoom connection whose calls the curl mock answers.
+        set_config('clientid', 'id', 'zoom');
+        set_config('clientsecret', 'secret', 'zoom');
+        set_config('accountid', 'account', 'zoom');
+        $oauth = cache::make('mod_zoom', 'oauth');
+        $oauth->set('accesstoken', 'token');
+        $oauth->set('expires', time() + HOURSECS);
+        $oauth->set('scopes', []);
+        cache::make('mod_zoom', 'zoomid')->set($USER->id, 'host');
+
+        $iso = function ($time) {
+            return gmdate('Y-m-d\TH:i:s\Z', $time);
+        };
+        $response = json_encode([
+            'id' => (int) $zoom->meeting_id,
+            'host_id' => $zoom->host_id,
+            'email' => $USER->email,
+            'type' => ZOOM_RECURRING_FIXED_MEETING,
+            'topic' => $zoom->name,
+            'start_time' => $iso($first),
+            'duration' => 30,
+            'timezone' => 'UTC',
+            'join_url' => 'https://zoom.us/j/1',
+            'users' => [],
+            'schedulers' => [],
+            'meeting_security' => new stdClass(),
+            'recording' => ['auto_recording' => 'none'],
+            'page_count' => 1,
+            'total_records' => 0,
+            'recurrence' => ['type' => ZOOM_RECURRINGTYPE_DAILY, 'repeat_interval' => 1, 'end_times' => 2],
+            'occurrences' => [
+                ['occurrence_id' => '1', 'start_time' => $iso($first), 'duration' => 30, 'status' => 'available'],
+                ['occurrence_id' => '2', 'start_time' => $iso($second), 'duration' => 30, 'status' => 'available'],
+            ],
+            'settings' => new stdClass(),
+            'tracking_fields' => [],
+        ]);
+
+        // The staging edit: switch the grading method. Then save again unchanged, which used to compound.
+        foreach (['period', 'period'] as $method) {
+            $this->save_through_edit_form($zoom, $response, $method);
+
+            $this->assertEquals(100, $DB->get_field('zoom', 'grade', ['id' => $zoom->id]), 'Points per occurrence');
+            $this->assertEquals([200.0, 200.0], $this->grade($zoom, $student->id));
+            $this->assertEquals([200.0, 0.0], $this->grade($zoom, $absent->id));
+        }
+
+        $this->assertEquals('period', $DB->get_field('zoom', 'grading_method', ['id' => $zoom->id]));
+        $this->assertCount(2, $this->rows($zoom));
+    }
 }
