@@ -1,4 +1,4 @@
-<XMLDB xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" PATH="mod/zoom/db" VERSION="20250509" COMMENT="Zoom module" xsi:noNamespaceSchemaLocation="../../../lib/xmldb/xmldb.xsd">
+<XMLDB xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" PATH="mod/zoom/db" VERSION="20260927" COMMENT="Zoom module" xsi:noNamespaceSchemaLocation="../../../lib/xmldb/xmldb.xsd">
   <TABLES>
     <TABLE NAME="zoom" COMMENT="Zoom meetings and webinars">
       <FIELDS>
@@ -47,6 +47,7 @@
         <FIELD NAME="show_media" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="1" SEQUENCE="false" COMMENT="Show Media heading in activity page"/>
         <FIELD NAME="option_auto_recording" TYPE="char" LENGTH="5" NOTNULL="false" SEQUENCE="false" COMMENT="Auto record meeting."/>
         <FIELD NAME="registration" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="2" SEQUENCE="false" COMMENT="Force participants to register for the meeting/webinar"/>
+        <FIELD NAME="cumulativegradingstart" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="When the activity was created with cumulative grading installed; null for activities that keep the upstream grading."/>
       </FIELDS>
       <KEYS>
         <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
@@ -190,6 +191,43 @@
         <KEY NAME="id_primary" TYPE="primary" FIELDS="id"/>
         <KEY NAME="fk_zoomeventid" TYPE="foreign-unique" FIELDS="zoomeventid" REFTABLE="event" REFFIELDS="id"/>
       </KEYS>
+    </TABLE>
+    <TABLE NAME="zoom_grade_occurrences" COMMENT="Occurrences of recurring meetings graded cumulatively.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="zoomid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="occurrencetime" TYPE="int" LENGTH="12" NOTNULL="true" SEQUENCE="false" COMMENT="Upon entry: start of the calendar event. Attendance duration: start of the first meeting report."/>
+        <FIELD NAME="reportstart" TYPE="int" LENGTH="12" NOTNULL="false" SEQUENCE="false" COMMENT="Attendance duration only: start of the meeting reports of the occurrence."/>
+        <FIELD NAME="reportend" TYPE="int" LENGTH="12" NOTNULL="false" SEQUENCE="false" COMMENT="Attendance duration only: end of the meeting reports of the occurrence."/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="When the occurrence was recorded, from when it counts towards the maximum grade."/>
+        <FIELD NAME="timeclosed" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="When the users who did not attend were given 0, null while the occurrence is open."/>
+        <FIELD NAME="flaggedforreview" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="When the occurrence was flagged because its session was moved or removed while it had scores; null if not flagged. A flagged occurrence does not count."/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="id_primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="fk_zoomid" TYPE="foreign" FIELDS="zoomid" REFTABLE="zoom" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="zoomid_occurrencetime" UNIQUE="true" FIELDS="zoomid, occurrencetime"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="zoom_grade_occurrence_users" COMMENT="Score of each user in an occurrence. A user without a row was not expected to attend it.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="occurrenceid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="score" TYPE="number" LENGTH="10" NOTNULL="true" SEQUENCE="false" DECIMALS="5" COMMENT="Share of the occurrence grade earned, from 0 to 1."/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="id_primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="fk_occurrenceid" TYPE="foreign" FIELDS="occurrenceid" REFTABLE="zoom_grade_occurrences" REFFIELDS="id"/>
+        <KEY NAME="fk_userid" TYPE="foreign" FIELDS="userid" REFTABLE="user" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="occurrenceid_userid" UNIQUE="true" FIELDS="occurrenceid, userid"/>
+      </INDEXES>
     </TABLE>
   </TABLES>
 </XMLDB>

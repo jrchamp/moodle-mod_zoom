@@ -663,16 +663,38 @@ class get_meeting_reports extends scheduled_task {
         // ... (i.e.when the host start and end the meeting).
         // Not like those on 'zoom' table which represent the settings from zoom activity.
         $meetingtime = $DB->get_record('zoom_meeting_details', ['id' => $detailsid], 'start_time, end_time');
-        if (empty($zoomrecord->recurring)) {
-            $end = min($meetingtime->end_time, $zoomrecord->start_time + $zoomrecord->duration);
-            $start = max($meetingtime->start_time, $zoomrecord->start_time);
-            $meetingduration = $end - $start;
-        } else {
-            $meetingduration = $meetingtime->end_time - $meetingtime->start_time;
-        }
 
-        // Get the required records again.
-        $records = $DB->get_records('zoom_meeting_participants', ['detailsid' => $detailsid], 'join_time ASC');
+        // An occurrence of a cumulatively graded meeting adds to the grade of the earlier ones. All the
+        // reports of the occurrence count together, as a meeting that was restarted has more than one.
+        $cumulative = \mod_zoom\grades\occurrences::applies($zoomrecord);
+        if ($cumulative) {
+            $occurrence = \mod_zoom\grades\occurrences::get_report_occurrence($zoomrecord, $detailsid);
+            if (!$occurrence) {
+                return;
+            }
+
+            $grademax = $zoomrecord->grade;
+            $reports = \mod_zoom\grades\occurrences::get_occurrence_reports($zoomrecord, $occurrence);
+            $meetingduration = \mod_zoom\grades\occurrences::get_reports_duration($reports);
+            if ($meetingduration <= 0) {
+                return;
+            }
+
+            [$insql, $inparams] = $DB->get_in_or_equal(array_keys($reports));
+            $records = $DB->get_records_select('zoom_meeting_participants', "detailsid $insql", $inparams, 'join_time ASC');
+            $scores = [];
+        } else {
+            if (empty($zoomrecord->recurring)) {
+                $end = min($meetingtime->end_time, $zoomrecord->start_time + $zoomrecord->duration);
+                $start = max($meetingtime->start_time, $zoomrecord->start_time);
+                $meetingduration = $end - $start;
+            } else {
+                $meetingduration = $meetingtime->end_time - $meetingtime->start_time;
+            }
+
+            // Get the required records again.
+            $records = $DB->get_records('zoom_meeting_participants', ['detailsid' => $detailsid], 'join_time ASC');
+        }
         // Initialize the data arrays, indexing them later with userids.
         $durations = [];
         $join = [];
@@ -740,7 +762,15 @@ class get_meeting_reports extends scheduled_task {
                 }
 
                 // Check if the user is enrolled before assign the grade.
-                if (is_enrolled($context, $userid)) {
+                if ($cumulative && is_enrolled($context, $userid)) {
+                    // The score replaces the one the user had for the occurrence, so a late report corrects it.
+                    $scores[$userid] = $newgrade / $grademax;
+                    $graded++;
+                    $this->debugmsg('occurrence score updated for user with id: ' . $userid
+                                    . ', duration =' . $userduration
+                                    . ', occurrence duration =' . $meetingduration
+                                    . ', User grade:' . $newgrade);
+                } else if (is_enrolled($context, $userid)) {
                     // Compare with the old grade and only update if the new grade is higher.
                     // Use number_format because the old stored grade only contains 5 decimals.
                     if (empty($oldgrade) || $oldgrade < number_format($newgrade, 5)) {
@@ -777,6 +807,10 @@ class get_meeting_reports extends scheduled_task {
                 ];
                 $needgrade[] = get_string('nonrecognizedusergrade', 'mod_zoom', $a);
             }
+        }
+
+        if ($cumulative) {
+            \mod_zoom\grades\occurrences::record_report_scores($zoomrecord, $occurrence, $scores);
         }
 
         // Get the list of users who clicked join meeting and were not recognized by the participant report.

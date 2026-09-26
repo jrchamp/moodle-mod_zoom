@@ -1024,5 +1024,59 @@ function xmldb_zoom_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2025050900, 'zoom');
     }
 
+    if ($oldversion < 2026092700) {
+        // Define field cumulativegradingstart to be added to zoom. Existing activities keep null, so they keep
+        // the upstream grading; only activities created from now on are graded cumulatively.
+        $table = new xmldb_table('zoom');
+        $field = new xmldb_field('cumulativegradingstart', XMLDB_TYPE_INTEGER, '10', null, null, null, null, 'registration');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+
+        // Define table zoom_grade_occurrences to be created.
+        $table = new xmldb_table('zoom_grade_occurrences');
+        $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+        $table->add_field('zoomid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('occurrencetime', XMLDB_TYPE_INTEGER, '12', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('reportstart', XMLDB_TYPE_INTEGER, '12', null, null, null, null);
+        $table->add_field('reportend', XMLDB_TYPE_INTEGER, '12', null, null, null, null);
+        $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('timeclosed', XMLDB_TYPE_INTEGER, '10', null, null, null, null);
+        $table->add_field('flaggedforreview', XMLDB_TYPE_INTEGER, '10', null, null, null, null);
+        $table->add_key('id_primary', XMLDB_KEY_PRIMARY, ['id']);
+        $table->add_key('fk_zoomid', XMLDB_KEY_FOREIGN, ['zoomid'], 'zoom', ['id']);
+        $table->add_index('zoomid_occurrencetime', XMLDB_INDEX_UNIQUE, ['zoomid', 'occurrencetime']);
+        if (!$dbman->table_exists($table)) {
+            $dbman->create_table($table);
+        } else {
+            // Add any field a table of the same name lacks, without touching its data.
+            foreach (['reportstart', 'reportend', 'flaggedforreview'] as $fieldname) {
+                $field = new xmldb_field($fieldname, XMLDB_TYPE_INTEGER, $fieldname === 'flaggedforreview' ? '10' : '12');
+                if (!$dbman->field_exists($table, $field)) {
+                    $dbman->add_field($table, $field);
+                }
+            }
+        }
+
+        // Define table zoom_grade_occurrence_users to be created.
+        $table = new xmldb_table('zoom_grade_occurrence_users');
+        $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+        $table->add_field('occurrenceid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('userid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('score', XMLDB_TYPE_NUMBER, '10, 5', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('timemodified', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $table->add_key('id_primary', XMLDB_KEY_PRIMARY, ['id']);
+        $table->add_key('fk_occurrenceid', XMLDB_KEY_FOREIGN, ['occurrenceid'], 'zoom_grade_occurrences', ['id']);
+        $table->add_key('fk_userid', XMLDB_KEY_FOREIGN, ['userid'], 'user', ['id']);
+        $table->add_index('occurrenceid_userid', XMLDB_INDEX_UNIQUE, ['occurrenceid', 'userid']);
+        if (!$dbman->table_exists($table)) {
+            $dbman->create_table($table);
+        }
+
+        // Zoom savepoint reached.
+        upgrade_mod_savepoint(true, 2026092700, 'zoom');
+    }
+
     return true;
 }

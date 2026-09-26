@@ -70,6 +70,9 @@ function zoom_add_instance(stdClass $zoom, ?mod_zoom_mod_form $mform = null) {
     global $CFG, $DB;
     require_once($CFG->dirroot . '/mod/zoom/locallib.php');
 
+    // Activities created from now on are graded cumulatively when they are recurring with a fixed time and points.
+    $zoom->cumulativegradingstart = time();
+
     if ((defined('PHPUNIT_TEST') && PHPUNIT_TEST) || (defined('BEHAT_TEST') && BEHAT_TEST)) {
         $zoom->id = $DB->insert_record('zoom', $zoom);
         zoom_grade_item_update($zoom);
@@ -391,6 +394,9 @@ function zoom_delete_instance($id) {
 
     $DB->delete_records('zoom_meeting_details', ['zoomid' => $zoom->id]);
 
+    // Delete the occurrences of a recurring meeting, with the scores of their users.
+    \mod_zoom\grades\occurrences::delete_for_zooms('?', [$zoom->id]);
+
     // Delete tracking field data for deleted meetings.
     $DB->delete_records('zoom_meeting_tracking_fields', ['meeting_id' => $zoom->id]);
 
@@ -528,12 +534,26 @@ function zoom_calendar_item_update(stdClass $zoom) {
     ];
     $events = $DB->get_records('event', $conditions);
     $eventfields = ['name', 'timestart', 'timeduration'];
+
+    // Changes to the events, so the occurrences of a cumulatively graded meeting can follow them.
+    $movedevents = [];
+    $removedevents = [];
+    $createdevents = [];
+
     foreach ($events as $event) {
         $uuid = $event->uuid;
         if (isset($newevents[$uuid])) {
             // This event already exists in Moodle.
             $changed = false;
             $newevent = $newevents[$uuid];
+            if ((int) $newevent->timestart !== (int) $event->timestart) {
+                $movedevents[] = [
+                    'oldstart' => (int) $event->timestart,
+                    'oldend' => (int) $event->timestart + (int) $event->timeduration,
+                    'newstart' => (int) $newevent->timestart,
+                ];
+            }
+
             // Check if the important fields have actually changed.
             foreach ($eventfields as $field) {
                 if ($newevent->$field !== $event->$field) {
@@ -549,6 +569,10 @@ function zoom_calendar_item_update(stdClass $zoom) {
             unset($newevents[$uuid]);
         } else {
             // Event does not exist in Zoom, so delete from Moodle.
+            $removedevents[] = [
+                'start' => (int) $event->timestart,
+                'end' => (int) $event->timestart + (int) $event->timeduration,
+            ];
             calendar_event::load($event)->delete();
         }
     }
@@ -556,6 +580,11 @@ function zoom_calendar_item_update(stdClass $zoom) {
     // Any remaining events in the array don't exist on Moodle, so create a new event.
     foreach ($newevents as $uuid => $newevent) {
         calendar_event::create($newevent, false);
+        $createdevents[] = (int) $newevent->timestart;
+    }
+
+    if (!empty($zoom->id)) {
+        \mod_zoom\grades\occurrences::calendar_updated($zoom, $movedevents, $removedevents, $createdevents);
     }
 }
 
@@ -723,6 +752,12 @@ function zoom_grade_item_update(stdClass $zoom, $grades = null) {
     global $CFG;
     require_once($CFG->libdir . '/gradelib.php');
 
+    // The grades and maximum of a cumulatively graded meeting always come from its occurrences.
+    if ($grades !== 'reset' && \mod_zoom\grades\occurrences::applies($zoom)) {
+        \mod_zoom\grades\occurrences::recalculate($zoom);
+        return;
+    }
+
     $item = [];
     $item['itemname'] = clean_param($zoom->name, PARAM_NOTAGS);
     $item['gradetype'] = GRADE_TYPE_VALUE;
@@ -778,7 +813,10 @@ function zoom_update_grades(stdClass $zoom, $userid = 0) {
     require_once($CFG->libdir . '/gradelib.php');
 
     // Populate array of grade objects indexed by userid.
-    if ($zoom->grade == 0) {
+    if (\mod_zoom\grades\occurrences::applies($zoom)) {
+        // The grades of a cumulatively graded meeting are the sums of its occurrence scores.
+        \mod_zoom\grades\occurrences::recalculate($zoom);
+    } else if ($zoom->grade == 0) {
         zoom_grade_item_update($zoom);
     } else if ($userid != 0) {
         $grade = grade_get_grades($zoom->course, 'mod', 'zoom', $zoom->id, $userid)->items[0]->grades[$userid];
@@ -821,6 +859,9 @@ function zoom_reset_gradebook($courseid) {
           JOIN {course_modules} cm ON cm.instance = z.id
           JOIN {modules} m ON m.id = cm.module AND m.name = 'zoom'
          WHERE z.course = ?";
+
+    // The occurrences are the source of cumulative grades, so they are reset with them.
+    \mod_zoom\grades\occurrences::delete_for_zooms('SELECT id FROM {zoom} WHERE course = ?', $params);
 
     if ($zooms = $DB->get_records_sql($sql, $params)) {
         foreach ($zooms as $zoom) {
