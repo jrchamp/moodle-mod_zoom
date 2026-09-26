@@ -587,8 +587,10 @@ final class occurrences_test extends advanced_testcase {
 
         $this->assertEquals([400.0, 200.0], $this->grade($zoom, $late->id));
         $rows = $this->rows($zoom);
-        $this->assertFalse($DB->record_exists('zoom_grade_occurrence_users', ['occurrenceid' => $rows[0]->id, 'userid' => $late->id]));
-        $this->assertFalse($DB->record_exists('zoom_grade_occurrence_users', ['occurrenceid' => $rows[1]->id, 'userid' => $late->id]));
+        foreach ([$rows[0], $rows[1]] as $row) {
+            $conditions = ['occurrenceid' => $row->id, 'userid' => $late->id];
+            $this->assertFalse($DB->record_exists('zoom_grade_occurrence_users', $conditions));
+        }
         $this->assertEquals([400.0, 200.0], $this->grade($zoom, $early->id));
     }
 
