@@ -880,9 +880,10 @@ final class occurrences_test extends advanced_testcase {
      * Back up and restore the course, with or without user data.
      *
      * @param bool $users
+     * @param int $shift seconds to move the course start date by in the restore
      * @return int id of the new course
      */
-    private function backup_and_restore($users) {
+    private function backup_and_restore($users, $shift = 0) {
         global $CFG, $USER;
 
         require_once($CFG->dirroot . '/backup/util/includes/backup_includes.php');
@@ -904,7 +905,7 @@ final class occurrences_test extends advanced_testcase {
         $file = $results['backup_destination'];
         $bc->destroy();
 
-        $folder = 'zoomtest' . ($users ? 'users' : 'nousers');
+        $folder = 'zoomtest' . ($users ? 'users' : 'nousers') . $shift;
         $file->extract_to_pathname(get_file_packer('application/vnd.moodle.backup'), $CFG->tempdir . '/backup/' . $folder);
 
         $newcourseid = \restore_dbops::create_new_course('Restored', 'R' . (int) $users, $this->course->category);
@@ -917,6 +918,10 @@ final class occurrences_test extends advanced_testcase {
             backup::TARGET_NEW_COURSE
         );
         $rc->get_plan()->get_setting('users')->set_value($users);
+        if ($shift) {
+            $rc->get_plan()->get_setting('course_startdate')->set_value($this->course->startdate + $shift);
+        }
+
         $this->assertTrue($rc->execute_precheck());
         $rc->execute_plan();
         $rc->destroy();
@@ -951,6 +956,42 @@ final class occurrences_test extends advanced_testcase {
         $this->assertEquals(200.0, (float) $item->grademax);
         $grade = grade_grade::fetch(['itemid' => $item->id, 'userid' => $student->id]);
         $this->assertEquals(100.0, (float) $grade->finalgrade);
+    }
+
+    /**
+     * A restore that shifts the course dates moves the cumulative grading start with the occurrences.
+     */
+    public function test_backup_restore_with_date_shift(): void {
+        global $DB;
+
+        $student = $this->student();
+        $since = $this->now - DAYSECS;
+        $first = $this->now - 3 * HOURSECS;
+        $zoom = $this->create_meeting(
+            [[1, $first, 1800], [2, $this->now + DAYSECS, 1800]],
+            'entry',
+            100,
+            $since
+        );
+        $DB->set_field('zoom', 'name', 'Cumulative', ['id' => $zoom->id]);
+        $this->join($zoom, $student->id, $first);
+
+        // An activity that keeps the upstream grading must keep doing so.
+        $legacy = $this->create_meeting([[1, $this->now + DAYSECS, 1800]]);
+        $DB->set_field('zoom', 'cumulativegradingstart', null, ['id' => $legacy->id]);
+        $DB->set_field('zoom', 'name', 'Legacy', ['id' => $legacy->id]);
+
+        $shift = 7 * DAYSECS;
+        $newcourseid = $this->backup_and_restore(true, $shift);
+
+        $newzoom = $DB->get_record('zoom', ['course' => $newcourseid, 'name' => 'Cumulative'], '*', MUST_EXIST);
+        $this->assertEquals($since + $shift, $newzoom->cumulativegradingstart);
+        $occurrence = $DB->get_record('zoom_grade_occurrences', ['zoomid' => $newzoom->id], '*', MUST_EXIST);
+        $this->assertEquals($first + $shift, $occurrence->occurrencetime);
+        $this->assertGreaterThanOrEqual($newzoom->cumulativegradingstart, $occurrence->occurrencetime);
+
+        $newlegacy = $DB->get_record('zoom', ['course' => $newcourseid, 'name' => 'Legacy'], '*', MUST_EXIST);
+        $this->assertNull($newlegacy->cumulativegradingstart);
     }
 
     /**
