@@ -106,4 +106,18 @@ class restore_zoom_activity_task extends restore_activity_task {
 
         return $rules;
     }
+
+    /**
+     * Rebuild the grades of a cumulatively graded meeting from its restored occurrences.
+     *
+     * This runs after the gradebook has been restored, so the grade item exists by now.
+     */
+    public function after_restore() {
+        global $DB;
+
+        $zoom = $DB->get_record('zoom', ['id' => $this->get_activityid()]);
+        if ($zoom && \mod_zoom\grades\occurrences::applies($zoom)) {
+            \mod_zoom\grades\occurrences::recalculate($zoom);
+        }
+    }
 }
