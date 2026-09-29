@@ -153,7 +153,7 @@ final class mod_zoom_provider_test extends provider_testcase {
         $newcollection = provider::get_metadata($collection);
         $itemcollection = $newcollection->get_collection();
 
-        $this->assertCount(5, $itemcollection);
+        $this->assertCount(6, $itemcollection);
         $table = reset($itemcollection);
         $table2 = $itemcollection[1];
         $table3 = $itemcollection[2];
@@ -186,6 +186,78 @@ final class mod_zoom_provider_test extends provider_testcase {
         $this->assertArrayHasKey('userid', $privacyfields4);
 
         $this->assertEquals('privacy:metadata:zoom_breakout_participants', $table4->get_summary());
+
+        $table5 = $itemcollection[4];
+        $this->assertEquals('zoom_grade_occurrence_users', $table5->get_name());
+        $this->assertArrayHasKey('userid', $table5->get_privacy_fields());
+        $this->assertArrayHasKey('score', $table5->get_privacy_fields());
+        $this->assertArrayHasKey('timecreated', $table5->get_privacy_fields());
+        $this->assertArrayHasKey('timemodified', $table5->get_privacy_fields());
+        $this->assertEquals('privacy:metadata:zoom_grade_occurrence_users', $table5->get_summary());
+    }
+
+    /**
+     * The scores of users in occurrences of recurring meetings are found, exported and deleted.
+     * @covers ::get_contexts_for_userid
+     * @covers ::get_users_in_context
+     * @covers ::export_user_data
+     * @covers ::delete_data_for_user
+     * @covers ::delete_data_for_users
+     * @covers ::delete_data_for_all_users_in_context
+     */
+    public function test_grade_occurrence_users(): void {
+        global $DB;
+
+        $generator = $this->getDataGenerator();
+        $course = $generator->create_course();
+        $zoom = $generator->get_plugin_generator('mod_zoom')->create_instance(['course' => $course->id]);
+        $cm = get_coursemodule_from_instance('zoom', $zoom->id);
+        $context = context_module::instance($cm->id);
+        $joiner = $generator->create_and_enrol($course, 'student');
+        $other = $generator->create_and_enrol($course, 'student');
+
+        $occurrenceid = $DB->insert_record('zoom_grade_occurrences', (object) [
+            'zoomid' => $zoom->id,
+            'occurrencetime' => 1775001600,
+            'timecreated' => 1775005200,
+        ]);
+        foreach ([$joiner, $other] as $user) {
+            $DB->insert_record('zoom_grade_occurrence_users', (object) [
+                'occurrenceid' => $occurrenceid,
+                'userid' => $user->id,
+                'score' => 1,
+                'timecreated' => 1775005200,
+                'timemodified' => 1775005200,
+            ]);
+        }
+
+        $this->assertContains((string) $context->id, provider::get_contexts_for_userid($joiner->id)->get_contextids());
+
+        $userlist = new userlist($context, 'mod_zoom');
+        provider::get_users_in_context($userlist);
+        $this->assertContains((int) $joiner->id, $userlist->get_userids());
+
+        provider::export_user_data(new approved_contextlist($joiner, 'mod_zoom', [$context->id]));
+        $exported = writer::with_context($context)->get_data([get_string('privacy:gradeoccurrences', 'mod_zoom')]);
+        $this->assertCount(1, $exported->occurrences);
+        $this->assertEquals(1, $exported->occurrences[0]['score']);
+
+        provider::delete_data_for_user(new approved_contextlist($joiner, 'mod_zoom', [$context->id]));
+        $this->assertFalse($DB->record_exists('zoom_grade_occurrence_users', ['userid' => $joiner->id]));
+        $this->assertTrue($DB->record_exists('zoom_grade_occurrence_users', ['userid' => $other->id]));
+
+        provider::delete_data_for_users(new approved_userlist($context, 'mod_zoom', [$other->id]));
+        $this->assertFalse($DB->record_exists('zoom_grade_occurrence_users', ['userid' => $other->id]));
+
+        $DB->insert_record('zoom_grade_occurrence_users', (object) [
+            'occurrenceid' => $occurrenceid,
+            'userid' => $joiner->id,
+            'score' => 1,
+            'timecreated' => 1775005200,
+            'timemodified' => 1775005200,
+        ]);
+        provider::delete_data_for_all_users_in_context($context);
+        $this->assertFalse($DB->record_exists('zoom_grade_occurrence_users', ['occurrenceid' => $occurrenceid]));
     }
 
     /**

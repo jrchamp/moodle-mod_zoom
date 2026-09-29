@@ -663,6 +663,20 @@ class get_meeting_reports extends scheduled_task {
         // ... (i.e.when the host start and end the meeting).
         // Not like those on 'zoom' table which represent the settings from zoom activity.
         $meetingtime = $DB->get_record('zoom_meeting_details', ['id' => $detailsid], 'start_time, end_time');
+
+        // An occurrence of a cumulatively graded meeting adds to the grade of the earlier ones. Each report
+        // is graded as before, and its scores count for the occurrence it belongs to.
+        $cumulative = \mod_zoom\grades\occurrences::applies($zoomrecord);
+        if ($cumulative) {
+            $occurrence = \mod_zoom\grades\occurrences::get_report_occurrence($zoomrecord, $detailsid);
+            if (!$occurrence) {
+                return;
+            }
+
+            $grademax = $zoomrecord->grade;
+            $scores = [];
+        }
+
         if (empty($zoomrecord->recurring)) {
             $end = min($meetingtime->end_time, $zoomrecord->start_time + $zoomrecord->duration);
             $start = max($meetingtime->start_time, $zoomrecord->start_time);
@@ -740,7 +754,15 @@ class get_meeting_reports extends scheduled_task {
                 }
 
                 // Check if the user is enrolled before assign the grade.
-                if (is_enrolled($context, $userid)) {
+                if ($cumulative && is_enrolled($context, $userid)) {
+                    // The occurrence keeps the user's highest score, so a later report can raise it but not lower it.
+                    $scores[$userid] = $newgrade / $grademax;
+                    $graded++;
+                    $this->debugmsg('occurrence score updated for user with id: ' . $userid
+                                    . ', duration =' . $userduration
+                                    . ', report duration =' . $meetingduration
+                                    . ', User grade:' . $newgrade);
+                } else if (is_enrolled($context, $userid)) {
                     // Compare with the old grade and only update if the new grade is higher.
                     // Use number_format because the old stored grade only contains 5 decimals.
                     if (empty($oldgrade) || $oldgrade < number_format($newgrade, 5)) {
@@ -777,6 +799,10 @@ class get_meeting_reports extends scheduled_task {
                 ];
                 $needgrade[] = get_string('nonrecognizedusergrade', 'mod_zoom', $a);
             }
+        }
+
+        if ($cumulative) {
+            \mod_zoom\grades\occurrences::record_report_scores($zoomrecord, $occurrence, $scores);
         }
 
         // Get the list of users who clicked join meeting and were not recognized by the participant report.

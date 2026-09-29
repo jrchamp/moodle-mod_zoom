@@ -79,6 +79,7 @@ $string['clientid'] = 'Zoom client ID';
 $string['clientid_desc'] = '';
 $string['clientsecret'] = 'Zoom client secret';
 $string['clientsecret_desc'] = '';
+$string['closeoccurrences'] = 'Record and close occurrences of recurring meetings';
 $string['connectionfailed'] = 'Connection failed: ';
 $string['connectionok'] = 'Connection working.';
 $string['connectionsettings'] = 'Connection settings';
@@ -169,7 +170,8 @@ Attendance duration: the student receives a score based on the percentage of the
 Notes regarding Attendance duration method:<br>
 - This method requires the display name to contain id or fullname.<br>
 - It is recommended to set the setting \'zoom | defaultjoinbeforehost\' to (No) so the meeting duration is accurate.<br>
-- Some students who are already signed in to the Zoom client with details not matching those in Moodle must be graded manually after reviewing the meeting report.';
+- Some students who are already signed in to the Zoom client with details not matching those in Moodle must be graded manually after reviewing the meeting report.<br>
+Recurring meetings with a fixed time graded with points: the maximum grade is what each occurrence is worth. The activity grade is the total earned across the occurrences so far, and its maximum grows by the maximum grade with each occurrence. Students who miss an occurrence receive 0 for it.';
 $string['gradingperiod'] = 'Attendance Duration';
 $string['gradingsmallmeassage'] = 'User grades quick report for {$a->name}:
 <br>
@@ -264,6 +266,20 @@ $string['norooms'] = 'No Rooms';
 $string['nosessions'] = 'No sessions found for specified range.';
 $string['nozooms'] = 'No meetings';
 $string['nozoomsfound'] = 'No meetings found for the given course.';
+$string['occurrenceinvalidtarget'] = 'Choose another occurrence to merge into.';
+$string['occurrencenotflagged'] = 'This occurrence is not waiting for review.';
+$string['occurrencereview'] = 'Occurrences to review';
+$string['occurrencereview_desc'] = 'These sessions were moved or removed after students had already been credited for them, and could not be matched to a single new session. They do not count towards the grade until you decide what to do with each of them.';
+$string['occurrencereview_none'] = 'There are no occurrences to review.';
+$string['occurrencereview_notice'] = '{$a} occurrence(s) of this meeting were moved or removed after students had been credited for them, and do not count until they are reviewed.';
+$string['occurrencereviewdiscard'] = 'Discard';
+$string['occurrencereviewdiscard_help'] = 'Delete the occurrence and its scores.';
+$string['occurrencereviewdone'] = 'The occurrence has been resolved and the grades recalculated.';
+$string['occurrencereviewflagged'] = 'Flagged';
+$string['occurrencereviewkeep'] = 'Keep as a separate session';
+$string['occurrencereviewmerge'] = 'Merge into';
+$string['occurrencereviewscores'] = 'Scores';
+$string['occurrencereviewtime'] = 'Scheduled start';
 $string['occurson'] = 'Occurs On';
 $string['off'] = 'Off';
 $string['oldmeetings'] = 'Concluded Meetings';
@@ -310,6 +326,7 @@ $string['password_special'] = 'Passcode must have at least 1 special character (
 $string['passwordprotected'] = 'Passcode Protected';
 $string['pluginadministration'] = 'Manage Zoom meeting';
 $string['pluginname'] = 'Zoom meeting';
+$string['privacy:gradeoccurrences'] = 'Occurrence scores';
 $string['privacy:metadata:zoom'] = 'The plugin transmits personal data to the external Zoom service to create and manage meetings and to allow users to join them.';
 $string['privacy:metadata:zoom:email'] = "The user's email address (or other configured account identifier) is sent to identify their Zoom account.";
 $string['privacy:metadata:zoom:firstname'] = "The user's first name is sent when their Zoom account is provisioned automatically.";
@@ -317,6 +334,11 @@ $string['privacy:metadata:zoom:lastname'] = "The user's last name is sent when t
 $string['privacy:metadata:zoom:name'] = "The user's display name is included in the meeting join URL when they join a meeting.";
 $string['privacy:metadata:zoom_breakout_participants'] = 'The database table to store a list of zoom meeting breakout rooms participants';
 $string['privacy:metadata:zoom_breakout_participants:userid'] = 'The id of the participant user';
+$string['privacy:metadata:zoom_grade_occurrence_users'] = 'The database table that stores the score of each user in each occurrence of a recurring meeting.';
+$string['privacy:metadata:zoom_grade_occurrence_users:score'] = 'The share of the occurrence grade that the user earned';
+$string['privacy:metadata:zoom_grade_occurrence_users:timecreated'] = 'The time that the score was first recorded';
+$string['privacy:metadata:zoom_grade_occurrence_users:timemodified'] = 'The time that the score was last changed';
+$string['privacy:metadata:zoom_grade_occurrence_users:userid'] = 'The id of the user';
 $string['privacy:metadata:zoom_meeting_details'] = 'The database table that stores information about each meeting instance.';
 $string['privacy:metadata:zoom_meeting_details:topic'] = 'The name of the meeting that the user attended.';
 $string['privacy:metadata:zoom_meeting_participants'] = 'The database table that stores information about meeting participants.';

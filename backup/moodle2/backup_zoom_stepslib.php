@@ -38,6 +38,8 @@ class backup_activity_structure_step extends \backup_activity_structure_step {
      * @return backup_nested_element
      */
     protected function define_structure() {
+        $userinfo = $this->get_setting_value('userinfo');
+
         // Define the root element describing the zoom instance.
         $zoom = new backup_nested_element('zoom', ['id'], [
             'intro', 'introformat', 'grade', 'grading_method', 'meeting_id', 'join_url', 'created_at', 'host_id', 'name',
@@ -47,23 +49,45 @@ class backup_activity_structure_step extends \backup_activity_structure_step {
             'option_participants_video', 'option_audio', 'option_mute_upon_entry', 'option_waiting_room',
             'option_authenticated_users', 'option_encryption_type', 'exists_on_zoom', 'alternative_hosts',
             'recordings_visible_default', 'show_schedule', 'show_security', 'show_media', 'option_auto_recording',
-            'registration',
+            'registration', 'cumulativegradingstart',
         ]);
 
         $trackingfields = new backup_nested_element('trackingfields');
 
         $trackingfield = new backup_nested_element('trackingfield', ['id'], ['meeting_id', 'tracking_field', 'value']);
 
+        $occurrences = new backup_nested_element('gradeoccurrences');
+
+        $occurrence = new backup_nested_element('gradeoccurrence', ['id'], [
+            'occurrencetime', 'reportstart', 'reportend', 'timecreated', 'timeclosed', 'flaggedforreview',
+        ]);
+
+        $occurrenceusers = new backup_nested_element('gradeoccurrenceusers');
+
+        $occurrenceuser = new backup_nested_element('gradeoccurrenceuser', ['id'], [
+            'userid', 'score', 'timecreated', 'timemodified',
+        ]);
+
         // If we had more elements, we would build the tree here.
         $zoom->add_child($trackingfields);
         $trackingfields->add_child($trackingfield);
+        $zoom->add_child($occurrences);
+        $occurrences->add_child($occurrence);
+        $occurrence->add_child($occurrenceusers);
+        $occurrenceusers->add_child($occurrenceuser);
 
         // Define data sources.
         $zoom->set_source_table('zoom', ['id' => backup::VAR_ACTIVITYID]);
         $trackingfield->set_source_table('zoom_meeting_tracking_fields', ['meeting_id' => backup::VAR_ACTIVITYID]);
 
-        // If we were referring to other tables, we would annotate the relation
-        // with the element's annotate_ids() method.
+        // The occurrences of a recurring meeting are the source of its grades, so they go with them.
+        if ($userinfo) {
+            $occurrence->set_source_table('zoom_grade_occurrences', ['zoomid' => backup::VAR_PARENTID], 'id ASC');
+            $occurrenceuser->set_source_table('zoom_grade_occurrence_users', ['occurrenceid' => backup::VAR_PARENTID], 'id ASC');
+        }
+
+        // Define id annotations.
+        $occurrenceuser->annotate_ids('user', 'userid');
 
         // Define file annotations.
         // Intro does not need itemid.
