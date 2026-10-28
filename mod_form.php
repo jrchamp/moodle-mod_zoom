@@ -791,10 +791,6 @@ class mod_zoom_mod_form extends moodleform_mod {
             $mform->addHelpButton('recordings_visible_default', 'recordingvisibility', 'mod_zoom');
         }
 
-        // Add meeting id.
-        $mform->addElement('hidden', 'meeting_id', -1);
-        $mform->setType('meeting_id', PARAM_ALPHANUMEXT);
-
         // Add host id (will error if user does not have an account on Zoom).
         $mform->addElement('hidden', 'host_id', $hostuserid);
         $mform->setType('host_id', PARAM_ALPHANUMEXT);
@@ -922,30 +918,37 @@ class mod_zoom_mod_form extends moodleform_mod {
             }
 
             // Unfortunately, the host is not only able to add alternative hosts in Moodle with the user picker.
-            // He is also able to add any alternative host with an email address in Zoom directly.
+            // They are also able to add any alternative host with an email address in Zoom directly.
             // Thus, we have to get the latest list of alternative hosts from the DB again now,
             // identify the users who were not selectable at all in this form and append them to the list
             // of selected alternative hosts.
 
-            // Get latest list of alternative hosts from the DB.
-            $result = $DB->get_field('zoom', 'alternative_hosts', ['meeting_id' => $data->meeting_id], IGNORE_MISSING);
+            // Only existing records might have alternative hosts stored.
+            if (!empty($this->current->meeting_id)) {
+                $result = $DB->get_field(
+                    'zoom',
+                    'alternative_hosts',
+                    ['meeting_id' => $this->current->meeting_id],
+                    IGNORE_MISSING
+                );
 
-            // Proceed only if there is a field of alternative hosts already.
-            if ($result !== false) {
-                $alternativehostsdb = zoom_get_alternative_host_array_from_string($result);
+                // Proceed only if there is a field of alternative hosts already.
+                if ($result !== false) {
+                    $alternativehostsdb = zoom_get_alternative_host_array_from_string($result);
 
-                // Get selectable alternative host users based on the capability.
-                $alternativehostschoices = zoom_get_selectable_alternative_hosts_list($this->context);
+                    // Get selectable alternative host users based on the capability.
+                    $alternativehostschoices = zoom_get_selectable_alternative_hosts_list($this->context);
 
-                // Iterate over the latest list of alternative hosts from the DB.
-                foreach ($alternativehostsdb as $ah) {
-                    // If the existing alternative host would not have been selectable.
-                    if (!array_key_exists($ah, $alternativehostschoices)) {
-                        // Add the alternative host to the alternative_hosts field.
-                        if ($data->alternative_hosts == '') {
-                            $data->alternative_hosts = $ah;
-                        } else {
-                            $data->alternative_hosts .= ',' . $ah;
+                    // Iterate over the latest list of alternative hosts from the DB.
+                    foreach ($alternativehostsdb as $ah) {
+                        // If the existing alternative host would not have been selectable.
+                        if (!array_key_exists($ah, $alternativehostschoices)) {
+                            // Add the alternative host to the alternative_hosts field.
+                            if ($data->alternative_hosts == '') {
+                                $data->alternative_hosts = $ah;
+                            } else {
+                                $data->alternative_hosts .= ',' . $ah;
+                            }
                         }
                     }
                 }
@@ -1050,10 +1053,13 @@ class mod_zoom_mod_form extends moodleform_mod {
 
         $config = get_config('zoom');
 
+        // Existing meetings may have a past start time.
+        $isnew = empty($this->_cm);
+
         // Only check for scheduled meetings.
         if (empty($data['recurring'])) {
             // Make sure start date is in the future.
-            if ($data['start_time'] < time() && $data['meeting_id'] < 0) {
+            if ($data['start_time'] < time() && $isnew) {
                 $errors['start_time'] = get_string('err_start_time_past', 'zoom');
             }
 
@@ -1065,7 +1071,7 @@ class mod_zoom_mod_form extends moodleform_mod {
             }
         } else if ($data['recurring'] == 1 && $data['recurrence_type'] != ZOOM_RECURRINGTYPE_NOTIME) {
             // Make sure start date time (first potential date of next meeting) is in the future.
-            if ($data['start_time'] < time() && $data['meeting_id'] < 0) {
+            if ($data['start_time'] < time() && $isnew) {
                 $errors['start_time'] = get_string('err_start_time_past_recurring', 'zoom');
             }
 

@@ -53,6 +53,9 @@ class provider implements core_userlist_provider, metadata_provider, request_plu
         // Add all user data fields to the collection.
 
         $coll->add_database_table('zoom_meeting_participants', [
+            'userid' => 'privacy:metadata:zoom_meeting_participants:userid',
+            'zoomuserid' => 'privacy:metadata:zoom_meeting_participants:zoomuserid',
+            'uuid' => 'privacy:metadata:zoom_meeting_participants:uuid',
             'name' => 'privacy:metadata:zoom_meeting_participants:name',
             'user_email' => 'privacy:metadata:zoom_meeting_participants:user_email',
             'join_time' => 'privacy:metadata:zoom_meeting_participants:join_time',
@@ -100,25 +103,43 @@ class provider implements core_userlist_provider, metadata_provider, request_plu
 
         $contextlist = new contextlist();
 
+        $params = [
+            'modname' => 'zoom',
+            'contextlevel' => CONTEXT_MODULE,
+            'userid' => $userid,
+        ];
+
+        // Meeting participants.
         $sql = 'SELECT c.id
                   FROM {context} c
             INNER JOIN {course_modules} cm ON cm.id = c.instanceid AND c.contextlevel = :contextlevel
             INNER JOIN {modules} m ON m.id = cm.module AND m.name = :modname
             INNER JOIN {zoom} z ON z.id = cm.instance
-            LEFT JOIN {zoom_meeting_details} zmd ON zmd.zoomid = z.id
-            LEFT JOIN {zoom_meeting_participants} zmp ON zmp.detailsid = zmd.id
-            LEFT JOIN {zoom_meeting_recordings} zmr ON zmr.zoomid = z.id
-            LEFT JOIN {zoom_meeting_recordings_view} zmrv ON zmrv.recordingsid = zmr.id
-                 WHERE zmp.userid = :userid1 OR zmrv.userid = :userid2
-        ';
+            INNER JOIN {zoom_meeting_details} zmd ON zmd.zoomid = z.id
+            INNER JOIN {zoom_meeting_participants} zmp ON zmp.detailsid = zmd.id
+                 WHERE zmp.userid = :userid';
+        $contextlist->add_from_sql($sql, $params);
 
-        $params = [
-            'modname' => 'zoom',
-            'contextlevel' => CONTEXT_MODULE,
-            'userid1' => $userid,
-            'userid2' => $userid,
-        ];
+        // Recording views.
+        $sql = 'SELECT c.id
+                  FROM {context} c
+            INNER JOIN {course_modules} cm ON cm.id = c.instanceid AND c.contextlevel = :contextlevel
+            INNER JOIN {modules} m ON m.id = cm.module AND m.name = :modname
+            INNER JOIN {zoom} z ON z.id = cm.instance
+            INNER JOIN {zoom_meeting_recordings} zmr ON zmr.zoomid = z.id
+            INNER JOIN {zoom_meeting_recordings_view} zmrv ON zmrv.recordingsid = zmr.id
+                 WHERE zmrv.userid = :userid';
+        $contextlist->add_from_sql($sql, $params);
 
+        // Breakout room participants.
+        $sql = 'SELECT c.id
+                  FROM {context} c
+            INNER JOIN {course_modules} cm ON cm.id = c.instanceid AND c.contextlevel = :contextlevel
+            INNER JOIN {modules} m ON m.id = cm.module AND m.name = :modname
+            INNER JOIN {zoom} z ON z.id = cm.instance
+            INNER JOIN {zoom_meeting_breakout_rooms} zmbr ON zmbr.zoomid = z.id
+            INNER JOIN {zoom_breakout_participants} zbp ON zbp.breakoutroomid = zmbr.id
+                 WHERE zbp.userid = :userid';
         $contextlist->add_from_sql($sql, $params);
 
         return $contextlist;
@@ -274,6 +295,43 @@ class provider implements core_userlist_provider, metadata_provider, request_plu
         }
 
         $recordingviewinstances->close();
+
+        $sql = "SELECT zbp.userid,
+                       zmbr.name AS breakoutroomname,
+                       cm.id AS cmid
+                  FROM {context} c
+            INNER JOIN {course_modules} cm ON cm.id = c.instanceid AND c.contextlevel = :contextlevel
+            INNER JOIN {modules} m ON m.id = cm.module AND m.name = :modname
+            INNER JOIN {zoom} z ON z.id = cm.instance
+            INNER JOIN {zoom_meeting_breakout_rooms} zmbr ON zmbr.zoomid = z.id
+            INNER JOIN {zoom_breakout_participants} zbp ON zbp.breakoutroomid = zmbr.id
+                 WHERE c.id $contextsql
+                       AND zbp.userid = :userid
+              ORDER BY cm.id ASC
+        ";
+
+        $params = [
+            'modname' => 'zoom',
+            'contextlevel' => CONTEXT_MODULE,
+            'userid' => $user->id,
+        ] + $contextparams;
+
+        $breakoutinstances = $DB->get_recordset_sql($sql, $params);
+        $breakoutrooms = [];
+        foreach ($breakoutinstances as $breakoutinstance) {
+            $breakoutrooms[$breakoutinstance->cmid][] = $breakoutinstance->breakoutroomname;
+        }
+        $breakoutinstances->close();
+
+        foreach ($breakoutrooms as $cmid => $roomnames) {
+            $context = context_module::instance($cmid);
+            $contextdata = helper::get_context_data($context, $user);
+            $instancedata = [
+                'breakout_rooms' => $roomnames,
+            ];
+            $contextdata = (object) array_merge((array) $contextdata, $instancedata);
+            writer::with_context($context)->export_data([get_string('breakoutrooms', 'mod_zoom')], $contextdata);
+        }
     }
 
     /**

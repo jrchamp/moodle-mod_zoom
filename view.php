@@ -169,7 +169,7 @@ if (!$showrecreate && $config->showcapacitywarning == true) {
                 'eligiblemeetingparticipants' => $eligiblemeetingparticipants,
                 'zoomprofileurl' => $config->zoomurl . '/profile',
                 'courseparticipantsurl' => $participantspageurl->out(),
-                'hostname' => zoom_get_user_display_name($zoom->host_id),
+                'hostname' => s(zoom_get_user_display_name($zoom->host_id)),
             ];
             $meetingcapacitywarning = get_string('meetingcapacitywarningheading', 'mod_zoom');
             $meetingcapacitywarning .= html_writer::empty_tag('br');

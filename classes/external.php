@@ -80,7 +80,7 @@ class external extends external_api {
         $warnings = [];
 
         // Request and permission validation.
-        $cm = $DB->get_record('course_modules', ['id' => $params['zoomid']], '*', MUST_EXIST);
+        $cm = get_coursemodule_from_id('zoom', $params['zoomid'], 0, false, MUST_EXIST);
         $zoom = $DB->get_record('zoom', ['id' => $cm->instance], '*', MUST_EXIST);
 
         $context = context_module::instance($cm->id);

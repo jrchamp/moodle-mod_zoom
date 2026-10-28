@@ -91,7 +91,7 @@ class get_meeting_reports extends scheduled_task {
         try {
             $this->service = zoom_webservice();
         } catch (moodle_exception $exception) {
-            mtrace('Skipping task - ', $exception->getMessage());
+            mtrace('Skipping task - ' . $exception->getMessage());
             return;
         }
 
@@ -612,7 +612,7 @@ class get_meeting_reports extends scheduled_task {
             // Check the grading method settings.
             if (!empty($zoomrecord->grading_method)) {
                 $gradingmethod = $zoomrecord->grading_method;
-            } else if ($defaultgrading = get_config('gradingmethod', 'zoom')) {
+            } else if ($defaultgrading = get_config('zoom', 'gradingmethod')) {
                 $gradingmethod = $defaultgrading;
             } else {
                 $gradingmethod = 'entry';
@@ -646,6 +646,8 @@ class get_meeting_reports extends scheduled_task {
         require_once($CFG->libdir . '/gradelib.php');
         $courseid = $zoomrecord->course;
         $context = context_course::instance($courseid);
+        $cm = get_coursemodule_from_instance('zoom', $zoomrecord->id, $courseid);
+        $cmid = $cm ? $cm->id : 0;
         // Get grade list for items.
         $gradelist = grade_get_grades($courseid, 'mod', 'zoom', $zoomrecord->id);
 
@@ -797,6 +799,7 @@ class get_meeting_reports extends scheduled_task {
                 'needgrade' => $needgrade,
                 'courseid' => $courseid,
                 'zoomid' => $zoomrecord->id,
+                'cmid' => $cmid,
                 'itemid' => $itemid,
                 'name' => $zoomrecord->name,
                 'notfound' => $notfound,
@@ -872,7 +875,7 @@ class get_meeting_reports extends scheduled_task {
             $needgrade = get_string('grading_needgrade', 'mod_zoom') . implode('<br>', $safeneedgrade) . "\n";
         }
 
-        $zoomid = $data['zoomid'];
+        $cmid = $data['cmid'];
         $itemid = $data['itemid'];
         $name = $data['name'];
         $courseid = $data['courseid'];
@@ -892,8 +895,8 @@ class get_meeting_reports extends scheduled_task {
         $gradeurl = html_writer::link($gurl, get_string('gradinglink', 'mod_zoom'));
 
         // Zoom instance url.
-        $zurl = new moodle_url('/mod/zoom/view.php', ['id' => $zoomid]);
-        $zoomurl = html_writer::link($zurl, $name);
+        $zurl = new moodle_url('/mod/zoom/view.php', ['id' => $cmid]);
+        $zoomurl = html_writer::link($zurl, format_string($name, true, ['context' => $context]));
 
         // Data object used in lang strings.
         $a = (object) [
