@@ -57,13 +57,13 @@ class get_meeting_recordings extends scheduled_task {
         try {
             $service = zoom_webservice();
         } catch (moodle_exception $exception) {
-            mtrace('Skipping task - ', $exception->getMessage());
+            mtrace('Skipping task - ' . $exception->getMessage());
             return;
         }
 
         $config = get_config('zoom');
         if (empty($config->viewrecordings)) {
-            mtrace('Skipping task - ', get_string('zoomerr_viewrecordings_off', 'zoom'));
+            mtrace('Skipping task - ' . get_string('zoomerr_viewrecordings_off', 'zoom'));
             return;
         }
 

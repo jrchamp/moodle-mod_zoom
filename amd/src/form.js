@@ -363,11 +363,11 @@ const BreakoutroomsEditor = class {
         $("li", thisObject.roomsListColumn).each((index, item) => {
             const tabIdArr = $(item).attr('id').split('-');
             const tabIndex = tabIdArr[1];
-            $('input[name="room-name-' + tabIndex + '"]', thisObject.roomsDataColumn).on("change keyup paste", () => {
-                const newHiddenValue = item.value;
-                $(item).next().val(newHiddenValue);
+            $('input[name="room-name-' + tabIndex + '"]', thisObject.roomsDataColumn).on("change keyup paste", (event) => {
+                const newHiddenValue = event.target.value;
+                $(event.target).next().val(newHiddenValue);
 
-                $("#tab-" + tabIndex + " .tab-name").text(item.value);
+                $("#tab-" + tabIndex + " .tab-name").text(newHiddenValue);
             });
         });
 

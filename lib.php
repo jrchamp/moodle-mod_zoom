@@ -92,6 +92,9 @@ function zoom_add_instance(stdClass $zoom, ?mod_zoom_mod_form $mform = null) {
 
     $zoom->course = (int) $zoom->course;
 
+    // Only the current user may host; use schedule_for for delegation.
+    $zoom->host_id = zoom_get_user_id();
+
     $zoom->breakoutrooms = [];
     if (!empty($zoom->rooms)) {
         $breakoutrooms = zoom_build_instance_breakout_rooms_array_for_api($zoom);
@@ -170,6 +173,12 @@ function zoom_update_instance(stdClass $zoom, ?mod_zoom_mod_form $mform = null) 
     if ($zoom->recurring && $zoom->recurrence_type == ZOOM_RECURRINGTYPE_WEEKLY) {
         $zoom->weekly_days = zoom_handle_weekly_days($zoom);
     }
+
+    // Trust the stored identifiers, not the submitted form values.
+    $existing = $DB->get_record('zoom', ['id' => $zoom->id], 'meeting_id, webinar, host_id', MUST_EXIST);
+    $zoom->meeting_id = $existing->meeting_id;
+    $zoom->webinar = $existing->webinar;
+    $zoom->host_id = $existing->host_id;
 
     $DB->update_record('zoom', $zoom);
 
@@ -393,6 +402,21 @@ function zoom_delete_instance($id) {
 
     // Delete tracking field data for deleted meetings.
     $DB->delete_records('zoom_meeting_tracking_fields', ['meeting_id' => $zoom->id]);
+
+    // Delete recordings and their view history.
+    $recordingids = $DB->get_fieldset('zoom_meeting_recordings', 'id', ['zoomid' => $zoom->id]);
+    if (!empty($recordingids)) {
+        [$insql, $inparams] = $DB->get_in_or_equal($recordingids, SQL_PARAMS_NAMED);
+        $DB->delete_records_select('zoom_meeting_recordings_view', "recordingsid $insql", $inparams);
+    }
+    $DB->delete_records('zoom_meeting_recordings', ['zoomid' => $zoom->id]);
+
+    // Delete iCal notification tracking.
+    $eventids = $DB->get_fieldset('event', 'id', ['modulename' => 'zoom', 'instance' => $zoom->id]);
+    if (!empty($eventids)) {
+        [$insql, $inparams] = $DB->get_in_or_equal($eventids, SQL_PARAMS_NAMED);
+        $DB->delete_records_select('zoom_ical_notifications', "zoomeventid $insql", $inparams);
+    }
 
     // Delete any dependent records here.
     zoom_calendar_item_delete($zoom);

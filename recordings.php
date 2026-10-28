@@ -92,7 +92,7 @@ if (empty($recordings)) {
             // Or if visible to students.
             if ($iszoommanager || intval($recording->showrecording) === 1) {
                 if (empty($recordingdate)) {
-                    $recordingdate = date('F j, Y, g:i:s a \P\T', $recording->recordingstart);
+                    $recordingdate = userdate($recording->recordingstart);
                 }
 
                 if (empty($recordingpasscode)) {
@@ -122,7 +122,9 @@ if (empty($recordings)) {
                     $recordingshowhtml = html_writer::div($recordingshowbuttonhtml);
                 }
 
-                $recordingname = trim($recording->name) . ' (' . zoom_get_recording_type_string($recording->recordingtype) . ')';
+                $recordingtitle = format_string(trim($recording->name), true, ['context' => $context]);
+                $recordingtype = s(zoom_get_recording_type_string($recording->recordingtype));
+                $recordingname = $recordingtitle . ' (' . $recordingtype . ')';
                 $params = ['id' => $cm->id, 'recordingid' => $recording->id];
                 $recordingurl = new moodle_url('/mod/zoom/loadrecording.php', $params);
                 $recordinglink = html_writer::link($recordingurl, $recordingname);

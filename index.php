@@ -190,6 +190,7 @@ if (has_capability('mod/zoom:refreshsessions', $context)) {
         'courseid' => $id,
         'start' => date('Y-m-d', strtotime('-3 days')),
         'end' => date('Y-m-d'),
+        'sesskey' => sesskey(),
     ];
     $url = new moodle_url($CFG->wwwroot . '/mod/zoom/console/get_meeting_report.php', $linkarguments);
     echo html_writer::link($url, get_string('refreshreports', 'mod_zoom'), ['target' => '_blank', 'class' => 'pl-4']);

@@ -461,6 +461,7 @@ final class get_meeting_reports_test extends advanced_testcase {
         $generator = $this->getDataGenerator()->get_plugin_generator('mod_zoom');
         $instance = $generator->create_instance($params);
         $id = $instance->id;
+        $cmid = $instance->cmid;
         // Normalize the meeting.
         $meeting = $this->meetingtask->normalize_meeting($meeting);
         $meeting->zoomid = $id;
@@ -678,7 +679,7 @@ final class get_meeting_reports_test extends advanced_testcase {
         $gradeurl = html_writer::link($gurl, get_string('gradinglink', 'mod_zoom'));
 
         // Zoom instance url.
-        $zurl = new moodle_url('/mod/zoom/view.php', ['id' => $id]);
+        $zurl = new moodle_url('/mod/zoom/view.php', ['id' => $cmid]);
         $zoomurl = html_writer::link($zurl, $zoomrecord->name);
         // The user need grading.
         $needgradestr = get_string('grading_needgrade', 'mod_zoom');
