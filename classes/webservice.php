@@ -1151,6 +1151,9 @@ class webservice {
             }
 
             $recordingcount = (int) $response->recording_count;
+            if (!isset($response->participant_audio_files)) {
+                throw new bad_request_exception('participant_audio_files: undefined', 400);
+            }
             $audiocount = count($response->participant_audio_files);
             if ($recordingcount !== $audiocount) {
                 // If there are no recording files and the recording count does not match, throw an exception.
