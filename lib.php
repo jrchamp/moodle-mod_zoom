@@ -371,7 +371,7 @@ function populate_zoom_from_response(stdClass $zoom, stdClass $response) {
  *
  * @param int $id Id of the module instance
  * @return boolean Success/Failure
- * @throws moodle_exception if failed to delete and zoom did not issue a not found error
+ * @throws moodle_exception if the remote meeting could not be deleted due to a non-API error
  */
 function zoom_delete_instance($id) {
     global $CFG, $DB;
@@ -389,6 +389,9 @@ function zoom_delete_instance($id) {
         } catch (\mod_zoom\not_found_exception $error) {
             // Meeting not on Zoom, so continue.
             mtrace('Meeting not on Zoom; continuing');
+        } catch (\mod_zoom\webservice_exception $error) {
+            // Log so the orphaned meeting can be cleaned up manually.
+            debugging('Zoom meeting ' . $zoom->meeting_id . ' not deleted: ' . $error->getMessage(), DEBUG_NORMAL);
         }
     }
 
