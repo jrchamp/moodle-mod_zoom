@@ -456,16 +456,16 @@ class mod_zoom_mod_form extends moodleform_mod {
             }
 
             $mform->addElement('html', $OUTPUT->render_from_template('zoom/breakoutrooms_rooms', $templatedata));
+
+            $mform->addElement('hidden', 'rooms', '');
+            $mform->setType('rooms', PARAM_RAW);
+
+            $mform->addElement('hidden', 'roomsparticipants', '');
+            $mform->setType('roomsparticipants', PARAM_RAW);
+
+            $mform->addElement('hidden', 'roomsgroups', '');
+            $mform->setType('roomsgroups', PARAM_RAW);
         }
-
-        $mform->addElement('hidden', 'rooms', '');
-        $mform->setType('rooms', PARAM_RAW);
-
-        $mform->addElement('hidden', 'roomsparticipants', '');
-        $mform->setType('roomsparticipants', PARAM_RAW);
-
-        $mform->addElement('hidden', 'roomsgroups', '');
-        $mform->setType('roomsgroups', PARAM_RAW);
 
         // Adding the "security" fieldset, where all settings relating to securing and protecting the meeting are shown.
         $mform->addElement('header', 'security', get_string('security', 'mod_zoom'));
@@ -836,6 +836,16 @@ class mod_zoom_mod_form extends moodleform_mod {
      */
     public function definition_after_data() {
         parent::definition_after_data();
+
+        // Hidden elements cannot render the array values submitted for breakout rooms.
+        foreach (['rooms', 'roomsparticipants', 'roomsgroups'] as $fieldname) {
+            if ($this->_form->elementExists($fieldname)) {
+                $element = $this->_form->getElement($fieldname);
+                if (is_array($element->getValue())) {
+                    $element->setValue('');
+                }
+            }
+        }
 
         // Get config.
         $config = get_config('zoom');
