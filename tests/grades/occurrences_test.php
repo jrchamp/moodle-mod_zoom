@@ -1130,6 +1130,32 @@ final class occurrences_test extends advanced_testcase {
     }
 
     /**
+     * The hourly task does not record again the sessions held before a course reset.
+     */
+    public function test_reset_does_not_record_past_sessions_again(): void {
+        global $DB;
+
+        $student = $this->student();
+        $past = $this->now - 3 * HOURSECS;
+        $zoom = $this->create_meeting([[1, $past, 1800], [2, $this->now + DAYSECS, 1800]], 'entry', 100, $past - HOURSECS);
+        occurrences::seed_and_close();
+        $this->assertCount(1, $this->rows($zoom));
+        $this->assertEquals([100.0, 0.0], $this->grade($zoom, $student->id));
+
+        zoom_reset_userdata((object) ['courseid' => $this->course->id, 'reset_zoom_all' => 1]);
+        $this->assertGreaterThanOrEqual($this->now, $DB->get_field('zoom', 'cumulativegradingstart', ['id' => $zoom->id]));
+
+        // The past session's calendar event is still there, but it is not recorded or closed again.
+        occurrences::seed_and_close();
+        $this->assertCount(0, $this->rows($zoom));
+        $this->assertEquals([100.0, null], $this->grade($zoom, $student->id));
+
+        // Sessions after the reset are recorded as before.
+        occurrences::seed_and_close($this->now + DAYSECS + HOURSECS);
+        $this->assertCount(1, $this->rows($zoom));
+    }
+
+    /**
      * Back up and restore the course, with or without user data.
      *
      * @param bool $users

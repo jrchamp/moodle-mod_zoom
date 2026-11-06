@@ -887,7 +887,15 @@ function zoom_reset_gradebook($courseid) {
           JOIN {modules} m ON m.id = cm.module AND m.name = 'zoom'
          WHERE z.course = ?";
 
-    // The occurrences are the source of cumulative grades, so they are reset with them.
+    // The occurrences are the source of cumulative grades, so they are reset with them. Cumulative
+    // grading starts again from now, so the sessions held before the reset are not recorded again.
+    $DB->set_field_select(
+        'zoom',
+        'cumulativegradingstart',
+        time(),
+        'course = ? AND cumulativegradingstart IS NOT NULL',
+        $params
+    );
     \mod_zoom\grades\occurrences::delete_for_zooms('SELECT id FROM {zoom} WHERE course = ?', $params);
 
     if ($zooms = $DB->get_records_sql($sql, $params)) {
