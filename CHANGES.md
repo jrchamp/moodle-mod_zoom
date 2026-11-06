@@ -1,5 +1,14 @@
 ### Releases ###
 
+#### v5.5.2 ####
+
+- Bugfix: TypeError when editing activities with breakout rooms #724 (thanks @ks19rl, @jrchamp)
+- Bugfix: Delete module task fails when Zoom API delete fails #725 (thanks @michael-hughes-strath, @jrchamp)
+- Bugfix: Use pagination for registrants API responses #727 (thanks @chuspi)
+- Bugfix: Require well-formed recording API responses #732 (thanks @nexterday, @RafaelFormaggini)
+- Hardening: MDL Shield cleanups (security and more) #733 (thanks @jrchamp)
+- Code quality: MDL Shield cleanups (privacy and more) #723 (thanks @jrchamp)
+
 #### v5.5.1 ####
 
 - Bugfix: Remove legacy FEATURE_GROUPMEMBERSONLY #715 (thanks @michael-hughes-strath, @University-of-Strathclyde-LTE-Team)
