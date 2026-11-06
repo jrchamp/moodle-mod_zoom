@@ -36,13 +36,20 @@ require_course_login($course);
 $context = context_course::instance($course->id);
 require_capability('mod/zoom:view', $context);
 require_capability('mod/zoom:refreshsessions', $context);
+require_sesskey();
 
 // Set up the moodle page.
-$PAGE->set_url('/mod/zoom/console/');
+$PAGE->set_url('/mod/zoom/console/get_meeting_report.php', ['courseid' => $courseid]);
+$PAGE->set_context($context);
+$PAGE->set_title(get_string('getmeetingreports', 'mod_zoom'));
+$PAGE->set_heading(format_string($course->fullname, true, ['context' => $context]));
 
+echo $OUTPUT->header();
 echo html_writer::tag('h1', get_string('getmeetingreports', 'mod_zoom'));
-echo '<pre>';
 $hostuuids = $DB->get_fieldset_select('zoom', 'DISTINCT host_id', 'course = ?', [$courseid]);
 $meetingtask = new \mod_zoom\task\get_meeting_reports();
+// Buffer output so it can be escaped.
+ob_start();
 $meetingtask->execute($startdate, $enddate, $hostuuids);
-echo '</pre>';
+echo html_writer::tag('pre', s(ob_get_clean()));
+echo $OUTPUT->footer();

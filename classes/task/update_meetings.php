@@ -60,7 +60,7 @@ class update_meetings extends scheduled_task {
         try {
             $service = zoom_webservice();
         } catch (moodle_exception $exception) {
-            mtrace('Skipping task - ', $exception->getMessage());
+            mtrace('Skipping task - ' . $exception->getMessage());
             return;
         }
 

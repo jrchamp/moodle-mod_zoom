@@ -92,6 +92,9 @@ function zoom_add_instance(stdClass $zoom, ?mod_zoom_mod_form $mform = null) {
 
     $zoom->course = (int) $zoom->course;
 
+    // Only the current user may host; use schedule_for for delegation.
+    $zoom->host_id = zoom_get_user_id();
+
     $zoom->breakoutrooms = [];
     if (!empty($zoom->rooms)) {
         $breakoutrooms = zoom_build_instance_breakout_rooms_array_for_api($zoom);
@@ -170,6 +173,12 @@ function zoom_update_instance(stdClass $zoom, ?mod_zoom_mod_form $mform = null) 
     if ($zoom->recurring && $zoom->recurrence_type == ZOOM_RECURRINGTYPE_WEEKLY) {
         $zoom->weekly_days = zoom_handle_weekly_days($zoom);
     }
+
+    // Trust the stored identifiers, not the submitted form values.
+    $existing = $DB->get_record('zoom', ['id' => $zoom->id], 'meeting_id, webinar, host_id', MUST_EXIST);
+    $zoom->meeting_id = $existing->meeting_id;
+    $zoom->webinar = $existing->webinar;
+    $zoom->host_id = $existing->host_id;
 
     $DB->update_record('zoom', $zoom);
 
@@ -362,7 +371,7 @@ function populate_zoom_from_response(stdClass $zoom, stdClass $response) {
  *
  * @param int $id Id of the module instance
  * @return boolean Success/Failure
- * @throws moodle_exception if failed to delete and zoom did not issue a not found error
+ * @throws moodle_exception if the remote meeting could not be deleted due to a non-API error
  */
 function zoom_delete_instance($id) {
     global $CFG, $DB;
@@ -380,6 +389,9 @@ function zoom_delete_instance($id) {
         } catch (\mod_zoom\not_found_exception $error) {
             // Meeting not on Zoom, so continue.
             mtrace('Meeting not on Zoom; continuing');
+        } catch (\mod_zoom\webservice_exception $error) {
+            // Log so the orphaned meeting can be cleaned up manually.
+            debugging('Zoom meeting ' . $zoom->meeting_id . ' not deleted: ' . $error->getMessage(), DEBUG_NORMAL);
         }
     }
 
@@ -393,6 +405,21 @@ function zoom_delete_instance($id) {
 
     // Delete tracking field data for deleted meetings.
     $DB->delete_records('zoom_meeting_tracking_fields', ['meeting_id' => $zoom->id]);
+
+    // Delete recordings and their view history.
+    $recordingids = $DB->get_fieldset_select('zoom_meeting_recordings', 'id', 'zoomid = ?', [$zoom->id]);
+    if (!empty($recordingids)) {
+        [$insql, $inparams] = $DB->get_in_or_equal($recordingids, SQL_PARAMS_NAMED);
+        $DB->delete_records_select('zoom_meeting_recordings_view', "recordingsid $insql", $inparams);
+    }
+    $DB->delete_records('zoom_meeting_recordings', ['zoomid' => $zoom->id]);
+
+    // Delete iCal notification tracking.
+    $eventids = $DB->get_fieldset_select('event', 'id', 'modulename = ? AND instance = ?', ['zoom', $zoom->id]);
+    if (!empty($eventids)) {
+        [$insql, $inparams] = $DB->get_in_or_equal($eventids, SQL_PARAMS_NAMED);
+        $DB->delete_records_select('zoom_ical_notifications', "zoomeventid $insql", $inparams);
+    }
 
     // Delete any dependent records here.
     zoom_calendar_item_delete($zoom);
