@@ -835,14 +835,14 @@ final class occurrences_test extends advanced_testcase {
     public function test_duration_reports_out_of_order(): void {
         $a = $this->student();
         $start = $this->now - DAYSECS;
-        $zoom = $this->create_meeting([[1, $start, 3600]], 'period');
+        $zoom = $this->create_meeting([[1, $start, 3600], [2, $start + DAYSECS - HOURSECS, 3600]], 'period');
 
         $this->report($zoom, 'late', $start + 2400, $start + 3600, [[$a->id, $start + 2400, $start + 3600]]);
         $this->report($zoom, 'early', $start, $start + 1800, [[$a->id, $start, $start + 1800]]);
 
         $rows = $this->rows($zoom);
         $this->assertCount(1, $rows);
-        $this->assertEquals($start + 2400, $rows[0]->occurrencetime, 'The occurrence keeps the time it was created with');
+        $this->assertEquals($start, $rows[0]->occurrencetime, 'The occurrence is recorded at the start of its session');
         $this->assertEquals($start, $rows[0]->reportstart);
         // Each report is graded on its own, and the student attended all of both.
         $this->assertEquals([100.0, 100.0], $this->grade($zoom, $a->id));
@@ -942,20 +942,91 @@ final class occurrences_test extends advanced_testcase {
     }
 
     /**
-     * Attendance duration does not depend on calendar events, so a report after its event is gone still grades.
+     * A report that arrives after the calendar synchronisation removed its ended event still counts.
      */
     public function test_duration_report_without_calendar_event(): void {
         global $DB;
 
         $a = $this->student();
         $start = $this->now - 3 * HOURSECS;
-        $zoom = $this->create_meeting([[1, $start, 3600]], 'period');
-        $DB->delete_records('event', ['modulename' => 'zoom', 'instance' => $zoom->id]);
+        $zoom = $this->create_meeting([[1, $start, 3600]], 'period', 100, $start - HOURSECS);
+
+        // Zoom no longer lists the ended occurrence, so its event is removed. The session is remembered, but does not count yet.
+        $this->sync($zoom, []);
+        $this->assertEquals(0, $DB->count_records('event', ['modulename' => 'zoom', 'instance' => $zoom->id]));
+        $this->assertCount(1, $this->rows($zoom));
+        occurrences::recalculate($zoom);
+        $this->assertEquals([100.0, null], $this->grade($zoom, $a->id));
 
         $this->report($zoom, 'r1', $start, $start + 3600, [[$a->id, $start, $start + 1800]]);
 
-        $this->assertCount(1, $this->rows($zoom));
+        $rows = $this->rows($zoom);
+        $this->assertCount(1, $rows);
+        $this->assertNull($rows[0]->flaggedforreview);
         $this->assertEquals([100.0, 50.0], $this->grade($zoom, $a->id));
+    }
+
+    /**
+     * A session held outside the schedule, such as a student alone in a meeting started without the host, does not count.
+     */
+    public function test_duration_session_outside_schedule_is_flagged(): void {
+        global $DB;
+
+        $a = $this->student();
+        $b = $this->student();
+        $start = $this->now - DAYSECS;
+        $zoom = $this->create_meeting([[1, $start, 3600], [2, $start + DAYSECS - 2 * HOURSECS, 3600]], 'period');
+
+        $this->report($zoom, 'class', $start, $start + 3600, [[$a->id, $start, $start + 1800], [$b->id, $start, $start + 3600]]);
+        $this->assertEquals([100.0, 50.0], $this->grade($zoom, $a->id));
+        $this->assertEquals([100.0, 100.0], $this->grade($zoom, $b->id));
+
+        // Student a sits alone in the meeting twice between the sessions.
+        $solo = $start + 6 * HOURSECS;
+        $this->report($zoom, 'solo1', $solo, $solo + 1800, [[$a->id, $solo, $solo + 1800]]);
+        $later = $solo + 3 * HOURSECS;
+        $this->report($zoom, 'solo2', $later, $later + 600, [[$a->id, $later, $later + 600]]);
+
+        $flagged = occurrences::get_flagged($zoom->id);
+        $this->assertCount(2, $flagged);
+        $this->assertCount(3, $this->rows($zoom));
+        $this->assertEquals([100.0, 50.0], $this->grade($zoom, $a->id), 'The maximum and grades are unchanged');
+        $this->assertEquals([100.0, 100.0], $this->grade($zoom, $b->id), 'Classmates are not given 0');
+
+        // The next scheduled session counts as usual, though the host started it 10 minutes early.
+        $next = $start + DAYSECS - 2 * HOURSECS;
+        $this->report($zoom, 'next', $next - 10 * MINSECS, $next + 3600, [[$b->id, $next - 10 * MINSECS, $next + 3600]]);
+        $this->assertEquals([200.0, 50.0], $this->grade($zoom, $a->id));
+        $this->assertEquals([200.0, 200.0], $this->grade($zoom, $b->id));
+        $this->assertCount(2, occurrences::get_flagged($zoom->id));
+
+        // A teacher discards one solo session and keeps the other, which then counts like any session.
+        [$first, $second] = array_values($flagged);
+        occurrences::resolve_flagged($zoom, $first->id, 'discard');
+        occurrences::resolve_flagged($zoom, $second->id, 'keep');
+        $this->assertCount(0, occurrences::get_flagged($zoom->id));
+        $this->assertEquals([300.0, 150.0], $this->grade($zoom, $a->id));
+        $this->assertEquals([300.0, 200.0], $this->grade($zoom, $b->id));
+        $this->assertEquals(0, $DB->count_records('zoom_grade_occurrences', ['id' => $first->id]));
+    }
+
+    /**
+     * A host's test meeting before the first session does not count, and a later report of it stays with it.
+     */
+    public function test_duration_test_meeting_is_flagged(): void {
+        $a = $this->student();
+        $start = $this->now - 3 * HOURSECS;
+        $zoom = $this->create_meeting([[1, $start, 3600]], 'period');
+
+        // The host tests the meeting the day before, restarting it once.
+        $test = $start - DAYSECS;
+        $this->report($zoom, 't1', $test, $test + 300, []);
+        $this->report($zoom, 't2', $test + 600, $test + 900, []);
+        $this->assertCount(1, occurrences::get_flagged($zoom->id), 'The restarted test meeting is one session');
+
+        $this->report($zoom, 'class', $start, $start + 3600, [[$a->id, $start, $start + 3600]]);
+        $this->assertCount(2, $this->rows($zoom));
+        $this->assertEquals([100.0, 100.0], $this->grade($zoom, $a->id));
     }
 
     /**

@@ -156,9 +156,12 @@ class occurrences {
     /**
      * Get the attendance duration occurrence a meeting report belongs to, recording it if needed.
      *
-     * A report belongs to the earliest occurrence whose report interval, widened by the time users
-     * may join early, overlaps it. The occurrence interval grows to cover the report. A report
-     * that belongs to none starts a new occurrence at its start time.
+     * A report belongs to the earliest counted occurrence whose report interval, widened by the time
+     * users may join early, overlaps it, such as one of a meeting the host restarted. Otherwise it is
+     * the first report of the scheduled session it overlaps, recorded at the start of that session.
+     * A report outside the schedule, such as a test meeting or one started without the host, is
+     * recorded flagged for review, so that it does not count until a teacher keeps it. The
+     * occurrence interval grows to cover the report.
      *
      * @param stdClass $zoom instance object
      * @param int $detailsid id of the zoom_meeting_details record
@@ -177,27 +180,41 @@ class occurrences {
 
         $lock = self::lock($zoom);
         try {
-            $occurrence = self::find_report_occurrence($zoom, $start, $end);
-            if ($occurrence) {
-                if ($start < $occurrence->reportstart || $end > $occurrence->reportend) {
-                    $occurrence->reportstart = min($occurrence->reportstart, $start);
-                    $occurrence->reportend = max($occurrence->reportend, $end);
-                    $DB->update_record('zoom_grade_occurrences', (object) [
-                        'id' => $occurrence->id,
-                        'reportstart' => $occurrence->reportstart,
-                        'reportend' => $occurrence->reportend,
-                    ]);
-                }
+            $occurrence = self::find_report_occurrence($zoom, $start, $end, false);
 
-                return $occurrence;
+            if (!$occurrence) {
+                $sessionstart = self::find_scheduled_session($zoom, $start, $end);
+                if ($sessionstart !== null) {
+                    $occurrence = self::get_or_create_occurrence(
+                        $zoom,
+                        $sessionstart,
+                        ['reportstart' => $start, 'reportend' => $end]
+                    );
+                }
             }
 
-            $occurrence = self::get_or_create_occurrence($zoom, $start, ['reportstart' => $start, 'reportend' => $end]);
-            if ($occurrence->reportstart === null) {
-                // An upon entry occurrence already has this time; it now covers the report too.
-                $occurrence->reportstart = $start;
-                $occurrence->reportend = $end;
-                $DB->update_record('zoom_grade_occurrences', $occurrence);
+            if (!$occurrence) {
+                // Another report of a session held outside the schedule.
+                $occurrence = self::find_report_occurrence($zoom, $start, $end, true);
+            }
+
+            if (!$occurrence) {
+                $occurrence = self::get_or_create_occurrence(
+                    $zoom,
+                    $start,
+                    ['reportstart' => $start, 'reportend' => $end, 'flaggedforreview' => time()]
+                );
+            }
+
+            if ($occurrence->reportstart === null || $start < $occurrence->reportstart || $end > $occurrence->reportend) {
+                // The occurrence may be a scheduled session that had no report yet.
+                $occurrence->reportstart = min($occurrence->reportstart ?? $start, $start);
+                $occurrence->reportend = max($occurrence->reportend ?? $end, $end);
+                $DB->update_record('zoom_grade_occurrences', (object) [
+                    'id' => $occurrence->id,
+                    'reportstart' => $occurrence->reportstart,
+                    'reportend' => $occurrence->reportend,
+                ]);
             }
 
             return $occurrence;
@@ -504,8 +521,9 @@ class occurrences {
     /**
      * Get the maximum of the activity grade: the occurrence grade times the counted occurrences.
      *
-     * Occurrences flagged for review are not counted. Before the first occurrence the maximum is
-     * the grade of one occurrence.
+     * Occurrences flagged for review are not counted, and neither is a scheduled attendance
+     * duration session that no meeting report has given scores. Before the first occurrence the
+     * maximum is the grade of one occurrence.
      *
      * @param stdClass $zoom instance object
      * @return float
@@ -513,9 +531,8 @@ class occurrences {
     public static function get_grademax(stdClass $zoom) {
         global $DB;
 
-        $count = empty($zoom->id) ? 0 : $DB->count_records_select(
-            'zoom_grade_occurrences',
-            'zoomid = ? AND flaggedforreview IS NULL',
+        $count = empty($zoom->id) ? 0 : $DB->count_records_sql(
+            'SELECT COUNT(1) FROM {zoom_grade_occurrences} o WHERE o.zoomid = ? AND ' . self::counted_select($zoom, 'o'),
             [$zoom->id]
         );
 
@@ -575,20 +592,22 @@ class occurrences {
     }
 
     /**
-     * Get the attendance duration occurrence a report interval belongs to.
+     * Get the attendance duration occurrence whose report interval overlaps a report interval.
      *
      * @param stdClass $zoom instance object
      * @param int $start start of the report
      * @param int $end end of the report
+     * @param bool $flagged whether to look among the occurrences flagged for review, rather than the others
      * @return stdClass|null record of the zoom_grade_occurrences table
      */
-    protected static function find_report_occurrence(stdClass $zoom, $start, $end) {
+    protected static function find_report_occurrence(stdClass $zoom, $start, $end, $flagged) {
         global $DB;
 
         $tolerance = self::get_tolerance();
+        $flag = $flagged ? 'flaggedforreview IS NOT NULL' : 'flaggedforreview IS NULL';
         $matches = $DB->get_records_select(
             'zoom_grade_occurrences',
-            'zoomid = ? AND reportstart IS NOT NULL AND reportstart - ? <= ? AND reportend + ? >= ?',
+            "zoomid = ? AND $flag AND reportstart IS NOT NULL AND reportstart - ? <= ? AND reportend + ? >= ?",
             [$zoom->id, $tolerance, $end, $tolerance, $start],
             'occurrencetime ASC',
             '*',
@@ -597,6 +616,77 @@ class occurrences {
         );
 
         return $matches ? reset($matches) : null;
+    }
+
+    /**
+     * Get the start of the earliest scheduled session a report interval overlaps.
+     *
+     * A session is scheduled while its calendar event exists. Once the event has ended, the
+     * calendar synchronisation may remove it, so the session is then remembered by an occurrence
+     * recorded at its start, which lasts as long as the meeting. Users may join a session up to the
+     * join tolerance before it starts, and a host may restart a meeting that ran over up to the
+     * same tolerance after it ends.
+     *
+     * @param stdClass $zoom instance object
+     * @param int $start start of the report
+     * @param int $end end of the report
+     * @return int|null start of the session, null if the report is outside the schedule
+     */
+    protected static function find_scheduled_session(stdClass $zoom, $start, $end) {
+        global $DB;
+
+        $tolerance = self::get_tolerance();
+        $starts = [];
+
+        $events = $DB->get_records_select(
+            'event',
+            'modulename = ? AND instance = ? AND timestart - ? <= ? AND timestart + timeduration + ? >= ?',
+            ['zoom', $zoom->id, $tolerance, $end, $tolerance, $start],
+            'timestart ASC',
+            'id, timestart',
+            0,
+            1
+        );
+        foreach ($events as $event) {
+            $starts[] = (int) $event->timestart;
+        }
+
+        $occurrences = $DB->get_records_select(
+            'zoom_grade_occurrences',
+            'zoomid = ? AND flaggedforreview IS NULL AND occurrencetime - ? <= ? AND occurrencetime + ? >= ?',
+            [$zoom->id, $tolerance, $end, (int) $zoom->duration + $tolerance, $start],
+            'occurrencetime ASC',
+            'id, occurrencetime',
+            0,
+            1
+        );
+        foreach ($occurrences as $occurrence) {
+            $starts[] = (int) $occurrence->occurrencetime;
+        }
+
+        return $starts ? min($starts) : null;
+    }
+
+    /**
+     * Get the SQL condition selecting the occurrences that count towards the grade of an instance.
+     *
+     * Occurrences flagged for review never count. With attendance duration, a scheduled session
+     * only counts once a meeting report has covered it, so a session nobody held does not count.
+     * Occurrences that already have scores or were closed, such as those recorded upon entry
+     * before the grading method was changed, keep counting.
+     *
+     * @param stdClass $zoom instance object
+     * @param string $alias alias of the zoom_grade_occurrences table
+     * @return string
+     */
+    protected static function counted_select(stdClass $zoom, $alias) {
+        $select = "$alias.flaggedforreview IS NULL";
+        if (self::get_grading_method($zoom) === 'period') {
+            $select .= " AND ($alias.reportstart IS NOT NULL OR $alias.timeclosed IS NOT NULL
+                         OR EXISTS (SELECT 1 FROM {zoom_grade_occurrence_users} cu WHERE cu.occurrenceid = $alias.id))";
+        }
+
+        return $select;
     }
 
     /**
@@ -623,6 +713,10 @@ class occurrences {
     /**
      * Keep, or record, the occurrence of an event that has ended, and close it.
      *
+     * With attendance duration, the occurrence only remembers that the session was scheduled, so
+     * that a meeting report arriving after the event is gone still counts. It is left for the
+     * report to close, and does not count until then.
+     *
      * Must be called while holding the lock of the instance.
      *
      * @param stdClass $zoom instance object
@@ -634,8 +728,16 @@ class occurrences {
         global $DB;
 
         $occurrence = $DB->get_record('zoom_grade_occurrences', ['zoomid' => $zoom->id, 'occurrencetime' => $occurrencetime]);
+        if (!$isentry) {
+            if (!$occurrence && $occurrencetime >= $zoom->cumulativegradingstart) {
+                self::get_or_create_occurrence($zoom, $occurrencetime);
+            }
+
+            return false;
+        }
+
         if (!$occurrence) {
-            if (!$isentry || $occurrencetime < $zoom->cumulativegradingstart) {
+            if ($occurrencetime < $zoom->cumulativegradingstart) {
                 return false;
             }
 
@@ -847,8 +949,9 @@ class occurrences {
             $params[] = $userid;
         }
 
+        $counted = self::counted_select($zoom, 'o');
         $sql = "SELECT u.userid,
-                       SUM(CASE WHEN o.flaggedforreview IS NULL THEN u.score ELSE 0 END) AS score
+                       SUM(CASE WHEN $counted THEN u.score ELSE 0 END) AS score
                   FROM {zoom_grade_occurrence_users} u
                   JOIN {zoom_grade_occurrences} o ON o.id = u.occurrenceid
                  WHERE o.zoomid = ? $userselect
