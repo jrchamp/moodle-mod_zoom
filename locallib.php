@@ -1023,7 +1023,10 @@ function zoom_load_meeting($id, $context, $usestarturl = true) {
         $gradingmethod = 'entry';
     }
 
-    if ($gradingmethod === 'entry') {
+    if ($gradingmethod === 'entry' && \mod_zoom\grades\occurrences::applies($zoom)) {
+        // Give full credit for the occurrence the join was just allowed for, which adds to the earlier ones.
+        \mod_zoom\grades\occurrences::record_join($zoom, $USER->id);
+    } else if ($gradingmethod === 'entry') {
         // Check whether user has a grade. If not, then assign full credit to them.
         $gradelist = grade_get_grades($course->id, 'mod', 'zoom', $cm->instance, $USER->id);
 

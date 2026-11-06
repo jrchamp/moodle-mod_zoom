@@ -79,4 +79,13 @@ $tasks = [
         'dayofweek' => '*',
         'month' => '*',
     ],
+    [
+        'classname' => 'mod_zoom\task\close_occurrences',
+        'blocking' => 0,
+        'minute' => '5',
+        'hour' => '*',
+        'day' => '*',
+        'dayofweek' => '*',
+        'month' => '*',
+    ],
 ];

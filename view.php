@@ -201,6 +201,15 @@ if (!$showrecreate && $config->showcapacitywarning == true) {
     }
 }
 
+// Tell teachers about occurrences whose session was moved while it had scores, as they do not count until reviewed.
+if ($iszoommanager && ($flagged = count(\mod_zoom\grades\occurrences::get_flagged($zoom->id)))) {
+    $reviewurl = new moodle_url('/mod/zoom/occurrencereview.php', ['id' => $cm->id]);
+    echo $OUTPUT->notification(
+        html_writer::link($reviewurl, get_string('occurrencereview_notice', 'mod_zoom', $flagged)),
+        \core\output\notification::NOTIFY_WARNING
+    );
+}
+
 // Get meeting state from Zoom.
 [$inprogress, $available, $finished] = zoom_get_state($zoom);
 
