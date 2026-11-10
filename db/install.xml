@@ -196,12 +196,12 @@
       <FIELDS>
         <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
         <FIELD NAME="zoomid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
-        <FIELD NAME="occurrencetime" TYPE="int" LENGTH="12" NOTNULL="true" SEQUENCE="false" COMMENT="Upon entry: start of the calendar event. Attendance duration: start of the first meeting report."/>
+        <FIELD NAME="occurrencetime" TYPE="int" LENGTH="12" NOTNULL="true" SEQUENCE="false" COMMENT="Start of the scheduled session. For an attendance duration session held outside the schedule, start of its first meeting report."/>
         <FIELD NAME="reportstart" TYPE="int" LENGTH="12" NOTNULL="false" SEQUENCE="false" COMMENT="Attendance duration only: start of the meeting reports of the occurrence."/>
         <FIELD NAME="reportend" TYPE="int" LENGTH="12" NOTNULL="false" SEQUENCE="false" COMMENT="Attendance duration only: end of the meeting reports of the occurrence."/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="When the occurrence was recorded, from when it counts towards the maximum grade."/>
         <FIELD NAME="timeclosed" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="When the users who did not attend were given 0, null while the occurrence is open."/>
-        <FIELD NAME="flaggedforreview" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="When the occurrence was flagged because its session was moved or removed while it had scores; null if not flagged. A flagged occurrence does not count."/>
+        <FIELD NAME="flaggedforreview" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="When the occurrence was flagged, because its session was moved or removed while it had scores or was held outside the schedule; null if not flagged. A flagged occurrence does not count."/>
       </FIELDS>
       <KEYS>
         <KEY NAME="id_primary" TYPE="primary" FIELDS="id"/>

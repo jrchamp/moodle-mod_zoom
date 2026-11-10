@@ -40,8 +40,8 @@ use stdClass;
  *
  * Upon entry, an occurrence is the calendar event the join button was opened for, and is also
  * recorded by a scheduled task once its window opens so that a session nobody joined still counts.
- * Attendance duration, an occurrence is a cluster of meeting reports that overlap in time, so it
- * does not depend on calendar events at all.
+ * Attendance duration, an occurrence is the scheduled session its meeting reports overlap. Reports
+ * outside the schedule are recorded flagged for review, and do not count until a teacher keeps them.
  *
  * Scores are stored as a share of the occurrence grade, from 0 to 1. No row for a user means the
  * occurrence did not apply to them; a row with 0 means they were absent.
@@ -163,9 +163,12 @@ class occurrences {
      * recorded flagged for review, so that it does not count until a teacher keeps it. The
      * occurrence interval grows to cover the report.
      *
+     * A report of a meeting that ended before cumulative grading started is not graded. A course
+     * reset starts cumulative grading again, and the reports task may fetch a report again after it.
+     *
      * @param stdClass $zoom instance object
      * @param int $detailsid id of the zoom_meeting_details record
-     * @return stdClass|null record of the zoom_grade_occurrences table, null if the report is missing
+     * @return stdClass|null record of the zoom_grade_occurrences table, null if the report is not graded
      */
     public static function get_report_occurrence(stdClass $zoom, $detailsid) {
         global $DB;
@@ -177,6 +180,9 @@ class occurrences {
 
         $start = (int) $report->start_time;
         $end = max($start, (int) $report->end_time);
+        if ($end < $zoom->cumulativegradingstart) {
+            return null;
+        }
 
         $lock = self::lock($zoom);
         try {
@@ -430,10 +436,10 @@ class occurrences {
     }
 
     /**
-     * Resolve an occurrence flagged for review.
+     * Resolve an occurrence flagged for review, or discard any occurrence.
      *
      * @param stdClass $zoom instance object
-     * @param int $occurrenceid id of the flagged occurrence
+     * @param int $occurrenceid id of the occurrence, which must be flagged unless it is discarded
      * @param string $action 'keep' to count it as a session of its own, 'merge' to give each user
      *                       the higher of their two scores in the target occurrence and delete it,
      *                       or 'discard' to delete it with its scores
@@ -453,7 +459,7 @@ class occurrences {
                 '*',
                 MUST_EXIST
             );
-            if (empty($occurrence->flaggedforreview)) {
+            if (empty($occurrence->flaggedforreview) && $action !== 'discard') {
                 throw new \moodle_exception('occurrencenotflagged', 'mod_zoom');
             }
 
@@ -516,6 +522,26 @@ class occurrences {
             [$zoomid],
             'occurrencetime ASC'
         );
+    }
+
+    /**
+     * Get the occurrences of an instance that count towards the grade, with how many users attended each.
+     *
+     * @param stdClass $zoom instance object
+     * @return stdClass[] records of the zoom_grade_occurrences table with an attended field, keyed by id
+     */
+    public static function get_counted(stdClass $zoom) {
+        global $DB;
+
+        $sql = "SELECT o.*,
+                       (SELECT COUNT(1)
+                          FROM {zoom_grade_occurrence_users} u
+                         WHERE u.occurrenceid = o.id AND u.score > 0) AS attended
+                  FROM {zoom_grade_occurrences} o
+                 WHERE o.zoomid = ? AND " . self::counted_select($zoom, 'o') . "
+              ORDER BY o.occurrencetime ASC";
+
+        return $DB->get_records_sql($sql, [$zoom->id]);
     }
 
     /**

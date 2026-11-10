@@ -201,13 +201,21 @@ if (!$showrecreate && $config->showcapacitywarning == true) {
     }
 }
 
-// Tell teachers about occurrences whose session was moved while it had scores, as they do not count until reviewed.
-if ($iszoommanager && ($flagged = count(\mod_zoom\grades\occurrences::get_flagged($zoom->id)))) {
+// Tell the teachers who can review them about the occurrences flagged for review, as they do not count until then,
+// and link to the page that lists the occurrences of a cumulatively graded meeting.
+if (
+    $iszoommanager && has_capability('moodle/grade:manage', context_course::instance($course->id))
+    && \mod_zoom\grades\occurrences::applies($zoom)
+) {
     $reviewurl = new moodle_url('/mod/zoom/occurrencereview.php', ['id' => $cm->id]);
-    echo $OUTPUT->notification(
-        html_writer::link($reviewurl, get_string('occurrencereview_notice', 'mod_zoom', $flagged)),
-        \core\output\notification::NOTIFY_WARNING
-    );
+    if ($flagged = count(\mod_zoom\grades\occurrences::get_flagged($zoom->id))) {
+        echo $OUTPUT->notification(
+            html_writer::link($reviewurl, get_string('occurrencereview_notice', 'mod_zoom', $flagged)),
+            \core\output\notification::NOTIFY_WARNING
+        );
+    } else {
+        echo html_writer::div(html_writer::link($reviewurl, get_string('occurrencereview_link', 'mod_zoom')), 'mb-3');
+    }
 }
 
 // Get meeting state from Zoom.

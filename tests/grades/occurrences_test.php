@@ -108,6 +108,11 @@ final class occurrences_test extends advanced_testcase {
             'occurrences' => $this->occurrences($sessions),
         ]);
 
+        if ($since === null && $method === 'period' && $sessions) {
+            // Meeting reports are only graded from when the activity was created, so it was created before its sessions.
+            $since = min(array_column($sessions, 1)) - HOURSECS;
+        }
+
         if ($since !== null) {
             $DB->set_field('zoom', 'cumulativegradingstart', $since, ['id' => $zoom->id]);
         }
@@ -1016,10 +1021,10 @@ final class occurrences_test extends advanced_testcase {
     public function test_duration_test_meeting_is_flagged(): void {
         $a = $this->student();
         $start = $this->now - 3 * HOURSECS;
-        $zoom = $this->create_meeting([[1, $start, 3600]], 'period');
+        $test = $start - DAYSECS;
+        $zoom = $this->create_meeting([[1, $start, 3600]], 'period', 100, $test - HOURSECS);
 
         // The host tests the meeting the day before, restarting it once.
-        $test = $start - DAYSECS;
         $this->report($zoom, 't1', $test, $test + 300, []);
         $this->report($zoom, 't2', $test + 600, $test + 900, []);
         $this->assertCount(1, occurrences::get_flagged($zoom->id), 'The restarted test meeting is one session');
@@ -1153,6 +1158,66 @@ final class occurrences_test extends advanced_testcase {
         // Sessions after the reset are recorded as before.
         occurrences::seed_and_close($this->now + DAYSECS + HOURSECS);
         $this->assertCount(1, $this->rows($zoom));
+    }
+
+    /**
+     * A report of a session held before a course reset is not graded when the reports task fetches it again.
+     */
+    public function test_reset_does_not_grade_earlier_reports_again(): void {
+        global $DB;
+
+        $a = $this->student();
+        $b = $this->student();
+        $start = $this->now - 3 * HOURSECS;
+        $next = $this->now + 5 * MINSECS;
+        $zoom = $this->create_meeting([[1, $start, 3600], [2, $next, 3600]], 'period');
+        $this->report($zoom, 'r1', $start, $start + 3600, [[$a->id, $start, $start + 3600]]);
+        $this->assertEquals([100.0, 100.0], $this->grade($zoom, $a->id));
+        $this->assertEquals([100.0, 0.0], $this->grade($zoom, $b->id));
+
+        zoom_reset_userdata((object) ['courseid' => $this->course->id, 'reset_zoom_all' => 1]);
+        $zoom = $DB->get_record('zoom', ['id' => $zoom->id]);
+
+        // The reset deleted the participants, so the task stores them again and grades the report.
+        $this->report($zoom, 'r1again', $start, $start + 3600, [[$a->id, $start, $start + 3600]]);
+        $this->assertCount(0, $this->rows($zoom));
+        $this->assertEquals([100.0, null], $this->grade($zoom, $a->id));
+        $this->assertEquals([100.0, null], $this->grade($zoom, $b->id));
+
+        // A session held after the reset is graded as before.
+        $this->report($zoom, 'r2', $next, $next + 3600, [[$b->id, $next, $next + 3600]]);
+        $this->assertCount(1, $this->rows($zoom));
+        $this->assertEquals([100.0, 100.0], $this->grade($zoom, $b->id));
+    }
+
+    /**
+     * A teacher can discard an occurrence that counts, such as one kept by mistake, but only resolve flagged ones.
+     */
+    public function test_discard_counted_occurrence(): void {
+        $a = $this->student();
+        $start = $this->now - DAYSECS;
+        $zoom = $this->create_meeting([[1, $start, 3600], [2, $start + 20 * HOURSECS, 3600]], 'period');
+        $this->report($zoom, 'r1', $start, $start + 3600, [[$a->id, $start, $start + 3600]]);
+        $second = $start + 20 * HOURSECS;
+        $this->report($zoom, 'r2', $second, $second + 3600, [[$a->id, $second, $second + 1800]]);
+        $this->assertEquals([200.0, 150.0], $this->grade($zoom, $a->id));
+
+        $counted = occurrences::get_counted($zoom);
+        $this->assertCount(2, $counted);
+        $this->assertEquals([1, 1], array_values(array_map('intval', array_column($counted, 'attended'))));
+        [$first, $last] = array_values($counted);
+
+        try {
+            occurrences::resolve_flagged($zoom, $last->id, 'keep');
+            $this->fail('Only a flagged occurrence can be kept');
+        } catch (\moodle_exception $e) {
+            $this->assertEquals('occurrencenotflagged', $e->errorcode);
+        }
+
+        occurrences::resolve_flagged($zoom, $last->id, 'discard');
+        $this->assertCount(1, $this->rows($zoom));
+        $this->assertEquals([100.0, 100.0], $this->grade($zoom, $a->id));
+        $this->assertEquals($first->id, $this->rows($zoom)[0]->id);
     }
 
     /**

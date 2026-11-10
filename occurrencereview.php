@@ -54,81 +54,113 @@ echo $OUTPUT->header();
 echo $OUTPUT->heading($strtitle);
 
 $flagged = \mod_zoom\grades\occurrences::get_flagged($zoom->id);
-if (empty($flagged)) {
-    echo $OUTPUT->notification(get_string('occurrencereview_none', 'mod_zoom'), \core\output\notification::NOTIFY_INFO);
-    echo $OUTPUT->continue_button(new moodle_url('/mod/zoom/view.php', ['id' => $cm->id]));
-    echo $OUTPUT->footer();
-    exit;
-}
+$counted = \mod_zoom\grades\occurrences::get_counted($zoom);
 
-echo html_writer::tag('p', get_string('occurrencereview_desc', 'mod_zoom'));
-
-// The occurrences a flagged one can be merged into.
-$targets = [];
-$counted = $DB->get_records_select(
-    'zoom_grade_occurrences',
-    'zoomid = ? AND flaggedforreview IS NULL',
-    [$zoom->id],
-    'occurrencetime ASC'
-);
-foreach ($counted as $occurrence) {
-    $targets[$occurrence->id] = userdate($occurrence->occurrencetime);
-}
-
-$table = new html_table();
-$table->head = [
-    get_string('occurrencereviewtime', 'mod_zoom'),
-    get_string('occurrencereviewflagged', 'mod_zoom'),
-    get_string('occurrencereviewscores', 'mod_zoom'),
-    get_string('actions'),
-];
-
-foreach ($flagged as $occurrence) {
-    $scores = $DB->get_records('zoom_grade_occurrence_users', ['occurrenceid' => $occurrence->id], 'userid ASC');
-    $lines = [];
-    foreach ($scores as $score) {
-        $user = core_user::get_user($score->userid);
-        $name = $user ? fullname($user) : $score->userid;
-        $lines[] = s($name) . ': ' . format_float($score->score * $zoom->grade, 2);
-    }
-
-    $hidden = ['id' => $cm->id, 'occurrenceid' => $occurrence->id, 'sesskey' => sesskey()];
-
-    $actions = $OUTPUT->single_button(
-        new moodle_url($url, $hidden + ['action' => 'keep']),
-        get_string('occurrencereviewkeep', 'mod_zoom'),
-        'post'
-    );
-    if (!empty($targets)) {
-        $merge = html_writer::start_tag('form', ['method' => 'post', 'action' => $url->out_omit_querystring()]);
-        foreach ($hidden + ['action' => 'merge'] as $name => $value) {
-            $merge .= html_writer::empty_tag('input', ['type' => 'hidden', 'name' => $name, 'value' => $value]);
-        }
-
-        $merge .= html_writer::select($targets, 'targetid', '', false);
-        $merge .= html_writer::empty_tag('input', [
-            'type' => 'submit',
-            'class' => 'btn btn-secondary ms-1',
-            'value' => get_string('occurrencereviewmerge', 'mod_zoom'),
-        ]);
-        $merge .= html_writer::end_tag('form');
-        $actions .= $merge;
-    }
-
-    $actions .= $OUTPUT->single_button(
+// The button that discards an occurrence, after a confirmation.
+$discardbutton = function (moodle_url $url, array $hidden) use ($OUTPUT) {
+    $button = new single_button(
         new moodle_url($url, $hidden + ['action' => 'discard']),
         get_string('occurrencereviewdiscard', 'mod_zoom'),
-        'post',
-        ['title' => get_string('occurrencereviewdiscard_help', 'mod_zoom')]
+        'post'
     );
+    $button->tooltip = get_string('occurrencereviewdiscard_help', 'mod_zoom');
+    $button->add_confirm_action(get_string('occurrencereviewdiscard_confirm', 'mod_zoom'));
 
-    $table->data[] = [
-        userdate($occurrence->occurrencetime),
-        userdate($occurrence->flaggedforreview),
-        implode(html_writer::empty_tag('br'), $lines),
-        $actions,
+    return $OUTPUT->render($button);
+};
+
+if (empty($flagged)) {
+    echo $OUTPUT->notification(get_string('occurrencereview_none', 'mod_zoom'), \core\output\notification::NOTIFY_INFO);
+} else {
+    echo html_writer::tag('p', get_string('occurrencereview_desc', 'mod_zoom'));
+
+    // The occurrences a flagged one can be merged into, which include the scheduled sessions that do not count yet.
+    $targets = [];
+    $unflagged = $DB->get_records_select(
+        'zoom_grade_occurrences',
+        'zoomid = ? AND flaggedforreview IS NULL',
+        [$zoom->id],
+        'occurrencetime ASC'
+    );
+    foreach ($unflagged as $occurrence) {
+        $targets[$occurrence->id] = userdate($occurrence->occurrencetime);
+    }
+
+    $table = new html_table();
+    $table->head = [
+        get_string('occurrencereviewtime', 'mod_zoom'),
+        get_string('occurrencereviewflagged', 'mod_zoom'),
+        get_string('occurrencereviewscores', 'mod_zoom'),
+        get_string('actions'),
     ];
+
+    foreach ($flagged as $occurrence) {
+        $scores = $DB->get_records('zoom_grade_occurrence_users', ['occurrenceid' => $occurrence->id], 'userid ASC');
+        $lines = [];
+        foreach ($scores as $score) {
+            $user = core_user::get_user($score->userid);
+            $name = $user ? fullname($user) : $score->userid;
+            $lines[] = s($name) . ': ' . format_float($score->score * $zoom->grade, 2);
+        }
+
+        $hidden = ['id' => $cm->id, 'occurrenceid' => $occurrence->id, 'sesskey' => sesskey()];
+
+        $actions = $OUTPUT->single_button(
+            new moodle_url($url, $hidden + ['action' => 'keep']),
+            get_string('occurrencereviewkeep', 'mod_zoom'),
+            'post'
+        );
+        if (!empty($targets)) {
+            $merge = html_writer::start_tag('form', ['method' => 'post', 'action' => $url->out_omit_querystring()]);
+            foreach ($hidden + ['action' => 'merge'] as $name => $value) {
+                $merge .= html_writer::empty_tag('input', ['type' => 'hidden', 'name' => $name, 'value' => $value]);
+            }
+
+            $merge .= html_writer::select($targets, 'targetid', '', false);
+            $merge .= html_writer::empty_tag('input', [
+                'type' => 'submit',
+                'class' => 'btn btn-secondary ms-1',
+                'value' => get_string('occurrencereviewmerge', 'mod_zoom'),
+            ]);
+            $merge .= html_writer::end_tag('form');
+            $actions .= $merge;
+        }
+
+        $actions .= $discardbutton($url, $hidden);
+
+        $table->data[] = [
+            userdate($occurrence->occurrencetime),
+            userdate($occurrence->flaggedforreview),
+            implode(html_writer::empty_tag('br'), $lines),
+            $actions,
+        ];
+    }
+
+    echo html_writer::table($table);
 }
 
-echo html_writer::table($table);
+// The occurrences that count, so that one recorded or kept by mistake can be discarded.
+if (!empty($counted)) {
+    echo $OUTPUT->heading(get_string('occurrencereview_counted', 'mod_zoom'), 3);
+    echo html_writer::tag('p', get_string('occurrencereview_counted_desc', 'mod_zoom'));
+
+    $table = new html_table();
+    $table->head = [
+        get_string('occurrencereviewtime', 'mod_zoom'),
+        get_string('occurrencereviewattended', 'mod_zoom'),
+        get_string('actions'),
+    ];
+    foreach ($counted as $occurrence) {
+        $hidden = ['id' => $cm->id, 'occurrenceid' => $occurrence->id, 'sesskey' => sesskey()];
+        $table->data[] = [
+            userdate($occurrence->occurrencetime),
+            (int) $occurrence->attended,
+            $discardbutton($url, $hidden),
+        ];
+    }
+
+    echo html_writer::table($table);
+}
+
+echo $OUTPUT->continue_button(new moodle_url('/mod/zoom/view.php', ['id' => $cm->id]));
 echo $OUTPUT->footer();

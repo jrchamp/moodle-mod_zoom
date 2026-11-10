@@ -821,15 +821,22 @@ class mod_zoom_mod_form extends moodleform_mod {
 
         // A cumulative activity's grade item maximum is the points per occurrence times the occurrences, so when
         // grades lock the grade field, the form must keep the points per occurrence rather than that maximum.
-        if (!empty($this->_instance) && class_exists('\\core_grades\\component_gradeitems')) {
+        if (!empty($this->_instance)) {
             $zoom = $DB->get_record('zoom', ['id' => $this->_instance]);
             if ($zoom && \mod_zoom\grades\occurrences::applies($zoom)) {
-                $gradefieldname = \core_grades\component_gradeitems::get_field_name_for_itemnumber(
-                    $component,
-                    $itemnumber,
-                    'grade'
-                );
-                $mform->getElement($gradefieldname)->currentgrade = $zoom->grade;
+                // Before Moodle 3.8 the field is always named grade.
+                $gradefieldname = 'grade';
+                if (class_exists('\\core_grades\\component_gradeitems')) {
+                    $gradefieldname = \core_grades\component_gradeitems::get_field_name_for_itemnumber(
+                        $component,
+                        $itemnumber,
+                        'grade'
+                    );
+                }
+
+                if ($mform->elementExists($gradefieldname)) {
+                    $mform->getElement($gradefieldname)->currentgrade = $zoom->grade;
+                }
             }
         }
         $options = [
