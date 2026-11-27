@@ -728,4 +728,104 @@ final class get_meeting_reports_test extends advanced_testcase {
         // No new messages as there has not been an update for participants.
         $this->assertEquals(1, count($messages));
     }
+
+    /**
+     * Participants who joined without the Moodle join button get full credit when grading upon entry.
+     * @return void
+     */
+    public function test_grading_method_entry(): void {
+        global $CFG, $DB;
+        require_once($CFG->libdir . '/gradelib.php');
+
+        $course = $this->getDataGenerator()->create_course();
+        $joined = $this->getDataGenerator()->create_and_enrol($course, 'student', [
+            'firstname' => 'Oitaa',
+            'lastname' => 'Arytis',
+            'email' => 'oitaa@example.com',
+        ]);
+        $manual = $this->getDataGenerator()->create_and_enrol($course, 'student', [
+            'firstname' => 'Khah',
+            'lastname' => 'Chouxuong',
+            'email' => 'khah@example.com',
+        ]);
+        $absent = $this->getDataGenerator()->create_and_enrol($course, 'student', [
+            'firstname' => 'Ziqit',
+            'lastname' => 'Apea',
+            'email' => 'ziqit@example.com',
+        ]);
+        $notenrolled = $this->getDataGenerator()->create_user([
+            'firstname' => 'Nibba',
+            'lastname' => 'Padhzinnuj',
+            'email' => 'nibba@example.com',
+        ]);
+
+        $meeting = (object) [
+            'id' => 789123,
+            'topic' => 'Some meeting',
+            'start_time' => '2020-04-01T15:00:00Z',
+            'end_time' => '2020-04-01T17:00:00Z',
+            'uuid' => 'entryuuid123',
+            'duration' => 120 * 60,
+            'participants' => 4,
+        ];
+
+        $generator = $this->getDataGenerator()->get_plugin_generator('mod_zoom');
+        $instance = $generator->create_instance([
+            'course' => $course->id,
+            'meeting_id' => $meeting->id,
+            'grade' => 100,
+            'grading_method' => 'entry',
+            'name' => 'Zoom',
+            'exists_on_zoom' => ZOOM_MEETING_EXISTS,
+            'start_time' => strtotime('2020-04-01T15:00:00Z'),
+            'duration' => 120 * 60,
+        ]);
+        $zoomrecord = $DB->get_record('zoom', ['id' => $instance->id]);
+        $this->assertEquals('entry', $zoomrecord->grading_method);
+
+        // A teacher already set a manual grade for one of the participants: it must be kept.
+        zoom_grade_item_update($zoomrecord, ['userid' => $manual->id, 'rawgrade' => 40]);
+
+        $meeting = $this->meetingtask->normalize_meeting($meeting);
+
+        // None of them clicked the Moodle join button: they are only in the Zoom participants report.
+        $this->mockparticipantsdata['entryuuid123'] = [
+            (object) [
+                'id' => 'p1', 'user_id' => 1, 'name' => 'Oitaa Arytis', 'user_email' => 'oitaa@example.com',
+                'join_time' => '2020-04-01T15:05:00Z', 'leave_time' => '2020-04-01T15:10:00Z', 'duration' => 300,
+            ],
+            (object) [
+                'id' => 'p2', 'user_id' => 2, 'name' => 'Khah Chouxuong', 'user_email' => 'khah@example.com',
+                'join_time' => '2020-04-01T15:05:00Z', 'leave_time' => '2020-04-01T16:00:00Z', 'duration' => 3300,
+            ],
+            (object) [
+                'id' => 'p3', 'user_id' => 3, 'name' => 'Nibba Padhzinnuj', 'user_email' => 'nibba@example.com',
+                'join_time' => '2020-04-01T15:05:00Z', 'leave_time' => '2020-04-01T16:00:00Z', 'duration' => 3300,
+            ],
+            (object) [
+                'id' => 'p4', 'user_id' => 4, 'name' => 'Guest', 'user_email' => '',
+                'join_time' => '2020-04-01T15:05:00Z', 'leave_time' => '2020-04-01T16:00:00Z', 'duration' => 3300,
+            ],
+        ];
+        $mockwebservice = $this->createMock('\mod_zoom\webservice');
+        $mockwebservice->method('get_meeting_participants')
+            ->will($this->returnCallback([$this, 'mock_get_meeting_participants']));
+        $this->meetingtask->service = $mockwebservice;
+
+        $this->assertTrue($this->meetingtask->process_meeting_reports($meeting));
+        $this->assertEquals(4, $DB->count_records('zoom_meeting_participants'));
+
+        $userids = [$joined->id, $manual->id, $absent->id, $notenrolled->id];
+        $grades = grade_get_grades($course->id, 'mod', 'zoom', $zoomrecord->id, $userids)->items[0]->grades;
+        $this->assertEquals(100, $grades[$joined->id]->grade);
+        $this->assertEquals(40, $grades[$manual->id]->grade);
+        $this->assertNull($grades[$absent->id]->grade);
+        $this->assertNull($grades[$notenrolled->id]->grade);
+
+        // Running the report again (e.g. via the CLI script to backfill) changes nothing.
+        $this->assertTrue($this->meetingtask->process_meeting_reports($meeting));
+        $grades = grade_get_grades($course->id, 'mod', 'zoom', $zoomrecord->id, $userids)->items[0]->grades;
+        $this->assertEquals(100, $grades[$joined->id]->grade);
+        $this->assertEquals(40, $grades[$manual->id]->grade);
+    }
 }
