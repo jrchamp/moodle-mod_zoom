@@ -618,7 +618,12 @@ class get_meeting_reports extends scheduled_task {
                 $gradingmethod = 'entry';
             }
 
-            if ($recordupdated && $gradingmethod === 'period') {
+            if ($gradingmethod === 'entry') {
+                // Give full credit to identified participants that joined without using the Moodle join button
+                // (direct join link, calendar, Zoom client history...). This is idempotent, so it also runs
+                // when no new records were inserted, which allows backfilling past meetings via the CLI script.
+                $this->grading_participant_upon_entry($zoomrecord, $detailsid);
+            } else if ($recordupdated && $gradingmethod === 'period') {
                 // Grade users according to their duration in the meeting.
                 $this->grading_participant_upon_duration($zoomrecord, $detailsid);
             }
@@ -632,6 +637,73 @@ class get_meeting_reports extends scheduled_task {
 
         $this->debugmsg('Finished updating meeting report');
         return true;
+    }
+
+    /**
+     * Give full credit to the participants of a meeting graded upon entry.
+     *
+     * Grading upon entry normally happens when the user clicks the join button in Moodle (see zoom_load_meeting()).
+     * Users who join through any other path (direct join link, calendar invitation, Zoom client history...) appear
+     * in the participants report but would never be graded, so they are graded here instead.
+     * Only identified Moodle users who are enrolled in the course and have no grade yet are graded.
+     *
+     * @param stdClass $zoomrecord
+     * @param int $detailsid
+     * @return int Number of users graded.
+     */
+    public function grading_participant_upon_entry($zoomrecord, $detailsid) {
+        global $CFG, $DB;
+
+        require_once($CFG->libdir . '/gradelib.php');
+
+        // Meetings with grade type "None" are not gradable.
+        if (empty($zoomrecord->grade)) {
+            return 0;
+        }
+
+        $userids = $DB->get_fieldset_select(
+            'zoom_meeting_participants',
+            'DISTINCT userid',
+            'detailsid = :detailsid AND userid IS NOT NULL',
+            ['detailsid' => $detailsid]
+        );
+        if (empty($userids)) {
+            return 0;
+        }
+
+        $userids = array_map('intval', $userids);
+        $gradelist = grade_get_grades($zoomrecord->course, 'mod', 'zoom', $zoomrecord->id, $userids);
+        if (empty($gradelist->items)) {
+            return 0;
+        }
+
+        $gradeitem = $gradelist->items[0];
+        $context = context_course::instance($zoomrecord->course);
+        $graded = 0;
+
+        foreach ($userids as $userid) {
+            // Do not touch existing grades (including grades set manually by a teacher).
+            if (isset($gradeitem->grades[$userid]->grade) && $gradeitem->grades[$userid]->grade !== null) {
+                continue;
+            }
+
+            if (!is_enrolled($context, $userid)) {
+                continue;
+            }
+
+            zoom_grade_item_update($zoomrecord, [
+                'rawgrade' => $gradeitem->grademax,
+                'userid' => $userid,
+                'usermodified' => $userid,
+                'dategraded' => '',
+                'feedbackformat' => '',
+                'feedback' => '',
+            ]);
+            $graded++;
+            $this->debugmsg('Grade upon entry assigned to user with id: ' . $userid);
+        }
+
+        return $graded;
     }
 
     /**
